@@ -15,10 +15,16 @@ export class SettingsService {
    * Retrieves non-sensitive public configuration for dynamic branding and borrower instructions.
    */
   async getPublicConfig() {
-    const [branding, paymentConfig] = await Promise.all([
-      prisma.brandingSettings.findUnique({ where: { id: 'default' } }),
-      prisma.paymentConfig.findUnique({ where: { id: 'default' } }),
-    ]);
+    let branding: any = null;
+    let paymentConfig: any = null;
+    try {
+      [branding, paymentConfig] = await Promise.all([
+        prisma.brandingSettings.findUnique({ where: { id: 'default' } }),
+        prisma.paymentConfig.findUnique({ where: { id: 'default' } }),
+      ]);
+    } catch {
+      // Non-blocking fallback for public config if DB is temporarily initializing or re-connecting
+    }
 
     // Parse JSON fields safely
     let documentsConfig: unknown[] = [];

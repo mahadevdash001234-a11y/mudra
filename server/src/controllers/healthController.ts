@@ -1,13 +1,15 @@
 import { Request, Response } from 'express';
 import { prisma } from '../services/db';
 import { config } from '../config';
+import { logger } from '../utils/logger';
 
 export async function getHealthCheck(_req: Request, res: Response): Promise<void> {
   let dbStatus = 'ok';
   try {
     // Verify database connectivity by running a lightweight query
     await prisma.$queryRawUnsafe('SELECT 1;');
-  } catch {
+  } catch (err) {
+    logger.error('Health check database query failed:', err);
     dbStatus = 'unhealthy';
   }
 

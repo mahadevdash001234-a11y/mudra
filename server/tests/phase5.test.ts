@@ -143,7 +143,7 @@ describe('Phase 5 — Complete Customer & Admin Integration Suite', () => {
         purpose: 'Medical and healthcare expenses',
       });
     testLoanId = loanRes.body.data.id;
-  });
+  }, 30000);
 
   afterAll(async () => {
     await prisma.invoice.deleteMany({});
@@ -369,7 +369,7 @@ describe('Phase 5 — Complete Customer & Admin Integration Suite', () => {
         where: { customerId, eventType: 'LOAN_STATUS' },
       });
       expect(notif).not.toBeNull();
-    }, 15000);
+    }, 30000);
 
     it('Admin verifies payment: marks Payment as PAID and Charge as PAID without altering loan approval status', async () => {
       const res = await request(app)

@@ -276,11 +276,19 @@ export const CustomerKycPage: React.FC = () => {
       if (selected.size > 10 * 1024 * 1024) {
         setErrorMessage('File size exceeds the 10 MB limit.');
         setFile(null);
+        e.target.value = '';
         return;
       }
       setErrorMessage(null);
       setFile(selected);
+      e.target.value = '';
     }
+  };
+
+  const toggleUploadType = (type: 'AADHAAR_FRONT' | 'AADHAAR_BACK') => {
+    setActiveUploadType((prev) => (prev === type ? null : type));
+    setFile(null);
+    setErrorMessage(null);
   };
 
   const handleUploadSubmit = (type: 'AADHAAR_FRONT' | 'AADHAAR_BACK') => {
@@ -924,10 +932,7 @@ export const CustomerKycPage: React.FC = () => {
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() => {
-                            setActiveUploadType(activeUploadType === 'AADHAAR_FRONT' ? null : 'AADHAAR_FRONT');
-                            setFile(null);
-                          }}
+                          onClick={() => toggleUploadType('AADHAAR_FRONT')}
                           className="text-xs h-7 px-2 text-[#64748B] hover:text-[#0F172A]"
                         >
                           {activeUploadType === 'AADHAAR_FRONT' ? 'Cancel' : 'Re-upload'}
@@ -939,10 +944,7 @@ export const CustomerKycPage: React.FC = () => {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => {
-                      setActiveUploadType(activeUploadType === 'AADHAAR_FRONT' ? null : 'AADHAAR_FRONT');
-                      setFile(null);
-                    }}
+                    onClick={() => toggleUploadType('AADHAAR_FRONT')}
                     className="text-xs w-full flex items-center justify-center space-x-1.5 h-9 border-[#D6E4F5]"
                   >
                     <Upload className="w-3.5 h-3.5" />
@@ -1059,10 +1061,7 @@ export const CustomerKycPage: React.FC = () => {
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() => {
-                            setActiveUploadType(activeUploadType === 'AADHAAR_BACK' ? null : 'AADHAAR_BACK');
-                            setFile(null);
-                          }}
+                          onClick={() => toggleUploadType('AADHAAR_BACK')}
                           className="text-xs h-7 px-2 text-[#64748B] hover:text-[#0F172A]"
                         >
                           {activeUploadType === 'AADHAAR_BACK' ? 'Cancel' : 'Re-upload'}
@@ -1074,10 +1073,7 @@ export const CustomerKycPage: React.FC = () => {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => {
-                      setActiveUploadType(activeUploadType === 'AADHAAR_BACK' ? null : 'AADHAAR_BACK');
-                      setFile(null);
-                    }}
+                    onClick={() => toggleUploadType('AADHAAR_BACK')}
                     className="text-xs w-full flex items-center justify-center space-x-1.5 h-9 border-[#D6E4F5]"
                   >
                     <Upload className="w-3.5 h-3.5" />

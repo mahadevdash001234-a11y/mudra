@@ -222,7 +222,7 @@ describe('WhatsApp Integration & Admin Loans Bulk Messaging Suite', () => {
 
       // Verify sticky Bulk Action Bar appears
       await waitFor(() => {
-        expect(screen.getByText(/2 applications selected/i)).toBeInTheDocument();
+        expect(screen.getByText(/2 records selected/i)).toBeInTheDocument();
       });
 
       // Open Bulk WhatsApp Campaign Modal

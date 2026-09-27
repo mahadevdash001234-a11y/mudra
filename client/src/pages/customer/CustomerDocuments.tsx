@@ -736,11 +736,7 @@ export const CustomerDocuments: React.FC = () => {
                         <Button
                           size="sm"
                           onClick={() => {
-                            setSelectedDocType(def.type);
-                            setTargetReuploadDocId(doc?.id || null);
-                            setSelectedFile(null);
-                            setDialogError(null);
-                            setUploadDialogOpen(true);
+                            openUploadModal(def.type, doc?.id);
                           }}
                           className={`text-xs h-8 px-3 rounded-lg font-bold ${
                             isUploaded

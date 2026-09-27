@@ -270,21 +270,26 @@ export class WhatsAppService {
       if (loanExists) validLoanId = latestLoan.id;
     }
 
-    const waRecord = await prisma.whatsAppMessage.create({
-      data: {
-        customerId: customer.id,
-        loanId: validLoanId,
-        adminId: validAdminId,
-        phone: sendResult.recipient || customer.mobile,
-        message: finalMessage,
-        templateName: templateName || 'CUSTOM',
-        providerMessageId: sendResult.providerMessageId || null,
-        status: isSent ? 'SENT' : 'FAILED',
-        sentAt: isSent ? new Date() : null,
-        failedAt: isSent ? null : new Date(),
-        failureReason,
-      },
-    });
+    let waRecord: any = null;
+    try {
+      waRecord = await prisma.whatsAppMessage.create({
+        data: {
+          customerId: customer.id,
+          loanId: validLoanId,
+          adminId: validAdminId,
+          phone: sendResult.recipient || customer.mobile,
+          message: finalMessage,
+          templateName: templateName || 'CUSTOM',
+          providerMessageId: sendResult.providerMessageId || null,
+          status: isSent ? 'SENT' : 'FAILED',
+          sentAt: isSent ? new Date() : null,
+          failedAt: isSent ? null : new Date(),
+          failureReason,
+        },
+      });
+    } catch (waErr: any) {
+      console.error(`Failed to record WhatsAppMessage in DB: ${waErr?.message}`);
+    }
 
     // 7. Create AuditLog
     await auditService.record({
@@ -295,9 +300,9 @@ export class WhatsAppService {
       entity: 'Customer',
       entityId: customer.id,
       newValue: {
-        messageId: waRecord.id,
+        messageId: waRecord?.id || null,
         phone: customer.mobile,
-        status: waRecord.status,
+        status: waRecord?.status || (isSent ? 'SENT' : 'FAILED'),
         failureReason,
       },
       ipAddress,
@@ -310,12 +315,12 @@ export class WhatsAppService {
         : `WhatsApp delivery failed: ${failureReason}`,
       error: failureReason || undefined,
       data: {
-        id: waRecord.id,
-        status: waRecord.status,
-        phone: waRecord.phone,
-        message: waRecord.message,
-        sentAt: waRecord.sentAt,
-        failureReason: waRecord.failureReason,
+        id: waRecord?.id || 'N/A',
+        status: waRecord?.status || (isSent ? 'SENT' : 'FAILED'),
+        phone: waRecord?.phone || customer.mobile,
+        message: waRecord?.message || finalMessage,
+        sentAt: waRecord?.sentAt || null,
+        failureReason: waRecord?.failureReason || failureReason,
       },
     };
   }

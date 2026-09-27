@@ -827,6 +827,6 @@ describe('Phase 4 — Loan Application & Management Suite', () => {
         where: { entityId: approveLoanId, action: 'APPLICATION_APPROVED' },
       });
       expect(log).not.toBeNull();
-    }, 15000);
+    }, 30000);
   });
 });

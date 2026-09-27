@@ -29,7 +29,9 @@ describe('Storage Provider Factory & CloudinaryStorageProvider', () => {
 
   it('should resolve CloudinaryStorageProvider when Cloudinary credentials exist in env', () => {
     if (envBackup.CLOUDINARY_CLOUD_NAME && envBackup.CLOUDINARY_API_KEY && envBackup.CLOUDINARY_API_SECRET) {
+      process.env.STORAGE_PROVIDER = 'cloudinary';
       const provider = resolveStorageProvider();
+      delete process.env.STORAGE_PROVIDER;
       expect(provider).toBeInstanceOf(CloudinaryStorageProvider);
       expect((provider as CloudinaryStorageProvider).isConfigured()).toBe(true);
     }

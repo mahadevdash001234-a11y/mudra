@@ -126,19 +126,19 @@ describe('Phase 4 — Loan Application Frontend Flows', () => {
     it('renders input fields for amount, tenure, and purpose', async () => {
       renderWithProviders(<ApplyLoanPage />);
 
-      expect(await screen.findByText('Apply for a New Loan')).toBeInTheDocument();
-      expect(await screen.findByLabelText(/Requested Loan Amount/i)).toBeInTheDocument();
-      expect(await screen.findByLabelText(/Repayment Tenure/i)).toBeInTheDocument();
-      expect(await screen.findByLabelText(/Purpose of Loan/i)).toBeInTheDocument();
+      expect(await screen.findByText('ENTER REQUIRED LOAN AMOUNT')).toBeInTheDocument();
+      expect(await screen.findByLabelText(/1. Required Loan Amount/i)).toBeInTheDocument();
+      expect(await screen.findByLabelText(/2. Repayment Tenure/i)).toBeInTheDocument();
+      expect(await screen.findByLabelText(/3. Purpose of Loan/i)).toBeInTheDocument();
       expect(
-        screen.getByRole('button', { name: /Submit Application/i })
+        screen.getByRole('button', { name: /Submit Loan Application/i })
       ).toBeInTheDocument();
     });
 
     it('validates required fields and shows error when empty', async () => {
       renderWithProviders(<ApplyLoanPage />);
 
-      const submitBtn = await screen.findByRole('button', { name: /Submit Application/i });
+      const submitBtn = await screen.findByRole('button', { name: /Submit Loan Application/i });
       fireEvent.click(submitBtn);
 
       await waitFor(() => {
@@ -166,9 +166,9 @@ describe('Phase 4 — Loan Application Frontend Flows', () => {
 
       renderWithProviders(<ApplyLoanPage />);
 
-      const amountInput = await screen.findByLabelText(/Requested Loan Amount/i);
-      const tenureInput = await screen.findByLabelText(/Repayment Tenure/i);
-      const purposeInput = await screen.findByLabelText(/Purpose of Loan/i);
+      const amountInput = await screen.findByLabelText(/1. Required Loan Amount/i);
+      const tenureInput = await screen.findByLabelText(/2. Repayment Tenure/i);
+      const purposeInput = await screen.findByLabelText(/3. Purpose of Loan/i);
 
       fireEvent.change(amountInput, { target: { value: '120000' } });
       fireEvent.change(tenureInput, { target: { value: '24' } });
@@ -176,7 +176,7 @@ describe('Phase 4 — Loan Application Frontend Flows', () => {
         target: { value: 'Medical emergency hospital bill' },
       });
 
-      const submitBtn = screen.getByRole('button', { name: /Submit Application/i });
+      const submitBtn = screen.getByRole('button', { name: /Submit Loan Application/i });
       fireEvent.click(submitBtn);
 
       await waitFor(() => {
