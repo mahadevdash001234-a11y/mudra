@@ -66,6 +66,7 @@ export const API_ENDPOINTS = {
     BULK_ARCHIVE: '/admin/loan-applications/bulk-archive',
     BULK_RESTORE: '/admin/loan-applications/bulk-restore',
     BULK_DELETE: '/admin/loan-applications/bulk-delete',
+    LOAN_APPROVAL_LETTER_PDF: (id: string) => `/admin/loans/${id}/approval-letter/pdf`,
   },
   DOCUMENTS: {
     CUSTOMER_LIST: (customerId: string) => `/admin/customers/${customerId}/documents`,

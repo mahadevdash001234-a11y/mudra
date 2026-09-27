@@ -1,6 +1,7 @@
 import { v2 as cloudinary } from 'cloudinary';
 import { Readable } from 'stream';
 import { IStorageProvider, StorageSaveResult } from './IStorageProvider';
+import { LocalStorageProvider } from './LocalStorageProvider';
 import { logger } from '../../utils/logger';
 
 export interface CloudinaryConfig {
@@ -109,7 +110,7 @@ export class CloudinaryStorageProvider implements IStorageProvider {
     return new Promise<StorageSaveResult>((resolve, reject) => {
       const uploadOptions: any = {
         public_id: publicId,
-        resource_type: resourceType,
+        resource_type: 'auto',
         type: accessType,
         overwrite: true,
         invalidate: true,
@@ -117,11 +118,17 @@ export class CloudinaryStorageProvider implements IStorageProvider {
 
       const uploadStream = cloudinary.uploader.upload_stream(
         uploadOptions,
-        (error, result) => {
+        async (error, result) => {
           if (error || !result) {
             const errMsg = error?.message || 'Cloudinary upload failed';
-            logger.error(`Cloudinary upload failed for ${key}: ${errMsg}`);
-            return reject(new Error(`Cloudinary upload error: ${errMsg}`));
+            logger.warn(`Cloudinary upload failed for ${key}: ${errMsg}. Falling back to LocalStorageProvider.`);
+            try {
+              const localStorage = new LocalStorageProvider();
+              const localResult = await localStorage.saveFile(key, buffer, mimeType);
+              return resolve(localResult);
+            } catch (fallbackErr) {
+              return reject(new Error(`Storage error: ${errMsg}`));
+            }
           }
 
           logger.info(`File uploaded to Cloudinary: ${result.public_id} (${result.bytes} bytes, type: ${accessType})`);
@@ -156,13 +163,18 @@ export class CloudinaryStorageProvider implements IStorageProvider {
       secure: true,
     });
 
-    const response = await fetch(downloadUrl);
-    if (!response.ok || !response.body) {
-      throw new Error(`Failed to fetch file from Cloudinary (HTTP ${response.status})`);
+    try {
+      const response = await fetch(downloadUrl);
+      if (response.ok && response.body) {
+        const arrayBuffer = await response.arrayBuffer();
+        return Readable.from(Buffer.from(arrayBuffer));
+      }
+    } catch {
+      // Fallback to local storage if Cloudinary fetch fails
     }
 
-    const arrayBuffer = await response.arrayBuffer();
-    return Readable.from(Buffer.from(arrayBuffer));
+    const localStorage = new LocalStorageProvider();
+    return localStorage.getFileStream(key);
   }
 
   async fileExists(key: string): Promise<boolean> {

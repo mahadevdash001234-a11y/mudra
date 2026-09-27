@@ -154,7 +154,12 @@ describe('Website Settings, Approval Letter & Branding E2E Integration Suite', (
           return Promise.resolve({ success: true, data: mockBrandingData });
         }
         if (endpoint.includes('/admin/settings/preview/approval-letter') || endpoint.includes('/admin/settings/preview/invoice')) {
-          return Promise.resolve(new Blob(['%PDF-1.4 Mock Sanction Letter PDF'], { type: 'application/pdf' }));
+          const enc = new TextEncoder();
+          const buf = enc.encode('%PDF-1.4 Mock Sanction Letter PDF').buffer;
+          return Promise.resolve({
+            data: buf,
+            headers: { 'content-type': 'application/pdf' },
+          });
         }
       }
       return Promise.resolve({ success: true, data: {} });
@@ -199,7 +204,7 @@ describe('Website Settings, Approval Letter & Branding E2E Integration Suite', (
 
     await waitFor(() => {
       expect(screen.getByText(/Live PDF Preview: Loan Approval Letter/i)).toBeInTheDocument();
-      expect(screen.getByRole('link', { name: /Download Preview PDF/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Download PDF/i })).toBeInTheDocument();
     });
 
     // Save settings

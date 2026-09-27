@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/api/client';
 import { API_ENDPOINTS } from '@/api/endpoints';
+import { usePdfViewer } from '@/hooks/usePdfViewer';
+import PdfViewerModal from '@/components/shared/PdfViewerModal';
 import { adminService } from '@/services/adminService';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -72,6 +74,40 @@ export const AdminChargesApprovalPage: React.FC = () => {
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectForm, setShowRejectForm] = useState(false);
+
+  // Invoice PDF Viewer via react-pdf canvas renderer
+  const invoicePdfViewer = usePdfViewer();
+  const [selectedInvoiceTitle, setSelectedInvoiceTitle] = useState<string>('');
+  const [selectedInvoiceFilename, setSelectedInvoiceFilename] = useState<string>('invoice.pdf');
+
+  const handleViewInvoice = async (chargeId: string, chargeName?: string) => {
+    try {
+      setSelectedInvoiceTitle(`Tax Invoice — ${chargeName || 'Charge'}`);
+      setSelectedInvoiceFilename(`Invoice_${chargeName || 'Charge'}_${chargeId.slice(-6)}.pdf`);
+      await invoicePdfViewer.fetchAndOpen(API_ENDPOINTS.CHARGES.SPECIFIC.INVOICE(chargeId, false));
+    } catch {
+      setActionError(`Failed to stream invoice for ${chargeName || 'Charge'}.`);
+    }
+  };
+
+  const handleDownloadInvoice = async (chargeId: string, chargeName?: string) => {
+    try {
+      const res = await apiClient.get(API_ENDPOINTS.CHARGES.SPECIFIC.INVOICE(chargeId, true), {
+        responseType: 'blob',
+      });
+      const blob = new Blob([res.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Invoice_${chargeName || 'Charge'}_${chargeId.slice(-6)}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch {
+      setActionError(`Failed to download invoice for ${chargeName || 'Charge'}.`);
+    }
+  };
 
   // Fetch payments list from backend
   const {
@@ -803,22 +839,23 @@ export const AdminChargesApprovalPage: React.FC = () => {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <a
-                      href={API_ENDPOINTS.CHARGES.SPECIFIC.INVOICE(selectedItem.chargeId, false)}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleViewInvoice(selectedItem.chargeId, selectedItem.chargeName)}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-[#F4F8FF] border border-emerald-300 text-emerald-700 text-xs font-bold transition-colors shadow-2xs"
                     >
                       <Eye className="w-3.5 h-3.5" />
                       View Invoice
-                    </a>
-                    <a
-                      href={API_ENDPOINTS.CHARGES.SPECIFIC.INVOICE(selectedItem.chargeId, true)}
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => handleDownloadInvoice(selectedItem.chargeId, selectedItem.chargeName)}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors shadow-2xs"
                     >
                       <Download className="w-3.5 h-3.5" />
                       PDF
-                    </a>
+                    </Button>
                   </div>
                 </div>
               )}
@@ -864,6 +901,21 @@ export const AdminChargesApprovalPage: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Invoice PDF Viewer Modal — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={invoicePdfViewer.open}
+        onClose={invoicePdfViewer.closeModal}
+        blob={invoicePdfViewer.blob}
+        blobUrl={invoicePdfViewer.blobUrl}
+        pdfBytes={invoicePdfViewer.pdfBytes}
+        loading={invoicePdfViewer.loading}
+        fetchError={invoicePdfViewer.error}
+        title={selectedInvoiceTitle || 'Tax Invoice'}
+        description="Charge payment receipt & tax invoice"
+        downloadFilename={selectedInvoiceFilename || 'invoice.pdf'}
+        onRetry={invoicePdfViewer.retry}
+      />
     </div>
   );
 };

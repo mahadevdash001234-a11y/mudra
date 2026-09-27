@@ -744,8 +744,8 @@ model Invoice {
   invoiceNumber      String           @unique // e.g. INV-2026-000001
   customerId         String
   customer           Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  loanId             String
-  loan               LoanApplication  @relation(fields: [loanId], references: [id], onDelete: Restrict)
+  loanId             String?
+  loan               LoanApplication? @relation(fields: [loanId], references: [id], onDelete: Restrict)
   chargeId           String?          @unique // 1 Charge = 1 Invoice idempotency
   paymentId          String?
   chargeName         String

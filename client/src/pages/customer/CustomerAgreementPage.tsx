@@ -89,18 +89,12 @@ export const CustomerAgreementPage: React.FC = () => {
   const handleDownloadPdf = async () => {
     try {
       setDownloadingPdf(true);
-      const token = localStorage.getItem('loanapprove_token');
-      const response = await fetch(`/api/customer/loans/${effectiveLoanId}/approval-letter/pdf`, {
-        headers: {
-          Authorization: token ? `Bearer ${token}` : '',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to generate official PDF');
-      }
-
-      const blob = await response.blob();
+      setErrorMessage(null);
+      const res = await apiClient.get(
+        `/customer/loans/${effectiveLoanId}/approval-letter/pdf?download=true`,
+        { responseType: 'blob' }
+      );
+      const blob = res.data instanceof Blob ? res.data : new Blob([res.data], { type: 'application/pdf' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;

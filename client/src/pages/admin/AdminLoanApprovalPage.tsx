@@ -26,6 +26,7 @@ import {
   CheckSquare,
   Square,
   Users,
+  Download,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -41,6 +42,9 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { apiClient } from '@/api/client';
+import { API_ENDPOINTS } from '@/api/endpoints';
+import { usePdfViewer } from '@/hooks/usePdfViewer';
+import PdfViewerModal from '@/components/shared/PdfViewerModal';
 import { loanApi, BulkWhatsAppResponse, BulkEmailResponse } from '@/api/loanApi';
 import { useBrandTitle } from '@/hooks/useBrandTitle';
 
@@ -141,6 +145,11 @@ export const AdminLoanApprovalPage: React.FC = () => {
   // Status message
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // Approval letter PDF viewer via react-pdf canvas renderer
+  const letterPdfViewer = usePdfViewer();
+  const [selectedLetterAppNum, setSelectedLetterAppNum] = useState<string>('');
+  const [selectedLetterLoanId, setSelectedLetterLoanId] = useState<string>('');
 
   // Calculate live EMI
   const calculatedEmi = (() => {
@@ -250,6 +259,7 @@ export const AdminLoanApprovalPage: React.FC = () => {
       totalPages: Math.max(1, Math.ceil(loans.length / pageSize)),
     };
 
+
   // Selection helpers
   const isAllSelected = loans.length > 0 && loans.every((loan) => selectedIds.includes(loan.id));
 
@@ -299,8 +309,36 @@ export const AdminLoanApprovalPage: React.FC = () => {
     setDateFrom('');
     setDateTo('');
     setPendingSubFilter('ALL');
-    setPage(1);
     setSelectedIds([]);
+  };
+
+  const handleViewApprovalLetter = async (loanId: string, appNum?: string) => {
+    try {
+      setSelectedLetterLoanId(loanId);
+      setSelectedLetterAppNum(appNum || 'Loan');
+      await letterPdfViewer.fetchAndOpen(API_ENDPOINTS.ADMIN_LOANS.LOAN_APPROVAL_LETTER_PDF(loanId));
+    } catch (err: any) {
+      alert(err.response?.data?.message || `Failed to open Approval Letter for ${appNum || 'Loan'}.`);
+    }
+  };
+
+  const handleDownloadApprovalLetter = async (loanId: string, appNum?: string) => {
+    try {
+      const res = await apiClient.get(`${API_ENDPOINTS.ADMIN_LOANS.LOAN_APPROVAL_LETTER_PDF(loanId)}?download=true`, {
+        responseType: 'blob',
+      });
+      const blob = new Blob([res.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Approval_Letter_${appNum || loanId}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(err.response?.data?.message || `Failed to download Approval Letter for ${appNum || 'Loan'}.`);
+    }
   };
 
   // Bulk WhatsApp Handlers
@@ -1071,11 +1109,22 @@ export const AdminLoanApprovalPage: React.FC = () => {
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    onClick={() => window.open(`/api/admin/loans/${loan.id}/approval-letter/pdf`, '_blank')}
-                                    className="h-7 px-2 text-[11px] border-success/40 text-success hover:bg-success/10"
+                                    onClick={() => handleViewApprovalLetter(loan.id, loan.applicationNumber)}
+                                    title="View Approved Loan Sanction Letter"
+                                    className="h-7 px-2 text-[11px] border-success/40 text-success hover:bg-success/10 font-bold"
                                   >
-                                    <FileText className="w-3 h-3 mr-1" />
-                                    Approval Letter
+                                    <Eye className="w-3 h-3 mr-1" />
+                                    View Letter
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleDownloadApprovalLetter(loan.id, loan.applicationNumber)}
+                                    title="Download Loan Sanction Letter PDF"
+                                    className="h-7 px-2 text-[11px] bg-success/10 border-success/40 text-success hover:bg-success/20 font-bold"
+                                  >
+                                    <Download className="w-3 h-3 mr-1" />
+                                    PDF
                                   </Button>
                                   <Button
                                     size="sm"
@@ -1193,7 +1242,7 @@ export const AdminLoanApprovalPage: React.FC = () => {
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => window.open(`/api/admin/loans/${loan.id}/approval-letter/pdf`, '_blank')}
+                            onClick={() => handleDownloadApprovalLetter(loan.id)}
                             className="flex-1 h-8 text-xs border-success/40 text-success"
                           >
                             <FileText className="w-3 h-3 mr-1" /> Letter
@@ -1989,6 +2038,26 @@ export const AdminLoanApprovalPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Approval Letter PDF Viewer Modal — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={letterPdfViewer.open}
+        onClose={() => {
+          letterPdfViewer.closeModal();
+          setSelectedLetterLoanId('');
+          setSelectedLetterAppNum('');
+        }}
+        blob={letterPdfViewer.blob}
+        blobUrl={letterPdfViewer.blobUrl}
+        pdfBytes={letterPdfViewer.pdfBytes}
+        loading={letterPdfViewer.loading}
+        fetchError={letterPdfViewer.error}
+        title={`Loan Approval Letter — ${selectedLetterAppNum}`}
+        description="Official sanction document"
+        downloadFilename={`Approval_Letter_${selectedLetterAppNum || 'Loan'}.pdf`}
+        onDownload={() => selectedLetterLoanId && handleDownloadApprovalLetter(selectedLetterLoanId, selectedLetterAppNum)}
+        onRetry={letterPdfViewer.retry}
+      />
     </div>
   );
 };

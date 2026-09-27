@@ -122,7 +122,7 @@ export const invoiceController = {
         customerMobile: customer?.mobile || '',
         customerEmail: customer?.email || '',
         customerAddress: customer ? `${customer.address}, ${customer.city}, ${customer.state}` : '',
-        applicationNumber: `APP-${invoice.loanId.slice(0, 8).toUpperCase()}`,
+        applicationNumber: invoice.loanId ? `APP-${invoice.loanId.slice(0, 8).toUpperCase()}` : 'N/A',
         chargeType: invoice.chargeName,
         amount: invoice.amount,
         taxAmount: invoice.taxAmount,

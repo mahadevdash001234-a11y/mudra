@@ -23,6 +23,8 @@ import {
 } from 'lucide-react';
 import { apiClient } from '@/api/client';
 import { API_ENDPOINTS } from '@/api/endpoints';
+import { usePdfViewer } from '@/hooks/usePdfViewer';
+import PdfViewerModal from '@/components/shared/PdfViewerModal';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -167,11 +169,9 @@ export const CustomerDocuments: React.FC = () => {
   const [isSubmittingLoan, setIsSubmittingLoan] = useState<boolean>(false);
   const [applyError, setApplyError] = useState<string | null>(null);
 
-  // Document preview modal state
-  const [previewOpen, setPreviewOpen] = useState(false);
+  // Document preview modal state — react-pdf canvas renderer
+  const docPdfViewer = usePdfViewer();
   const [previewTitle, setPreviewTitle] = useState('');
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
   const [currentDownloadFn, setCurrentDownloadFn] = useState<(() => void) | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -241,8 +241,8 @@ export const CustomerDocuments: React.FC = () => {
   const openUploadModal = (docType: string, reuploadDocId?: string) => {
     const isRequestedDoc = pendingRequests.some((r) => r.documentType === docType);
     if (docType !== 'AADHAAR_FRONT' && docType !== 'AADHAAR_BACK' && !isRequestedDoc) {
-      if (!isKycApproved && !isKycChargePaid) {
-        setErrorMessage('Complete your KYC verification first before uploading loan documents.');
+      if (!isKycApproved) {
+        setErrorMessage('Complete and verify KYC before uploading loan documents.');
         return;
       }
     }
@@ -277,6 +277,12 @@ export const CustomerDocuments: React.FC = () => {
   const handleUploadSubmit = async () => {
     if (!selectedFile || !selectedDocType) {
       setDialogError('Please select a valid file to upload.');
+      return;
+    }
+
+    const isRequestedDoc = pendingRequests.some((r) => r.documentType === selectedDocType);
+    if (selectedDocType !== 'AADHAAR_FRONT' && selectedDocType !== 'AADHAAR_BACK' && !isRequestedDoc && !isKycApproved) {
+      setDialogError('Complete and verify KYC before uploading loan documents.');
       return;
     }
 
@@ -344,55 +350,32 @@ export const CustomerDocuments: React.FC = () => {
 
   // Preview / Download helpers
   const handleViewPdf = async (url: string, title: string, downloadFn?: () => void) => {
-    try {
-      setPreviewLoading(true);
-      setPreviewTitle(title);
-      setCurrentDownloadFn(() => downloadFn || null);
-      setPreviewOpen(true);
-
-      const res = await apiClient.get(url, { responseType: 'blob' });
-      const blob = new Blob([res.data], { type: 'application/pdf' });
-      const blobUrl = window.URL.createObjectURL(blob);
-      setPreviewUrl(blobUrl);
-    } catch (err: any) {
-      setErrorMessage(err.response?.data?.message || 'Could not load document preview.');
-      setPreviewOpen(false);
-    } finally {
-      setPreviewLoading(false);
-    }
+    setPreviewTitle(title);
+    setCurrentDownloadFn(() => downloadFn || null);
+    await docPdfViewer.fetchAndOpen(url);
   };
 
   const handleDownloadBlob = async (url: string, filename: string) => {
     try {
-      const res = await apiClient.get(url, { responseType: 'blob' });
+      const res = await apiClient.get(url, { responseType: 'arraybuffer' });
       const blob = new Blob([res.data], { type: 'application/pdf' });
-      const downloadUrl = window.URL.createObjectURL(blob);
+      const downloadUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = downloadUrl;
       a.download = filename;
       document.body.appendChild(a);
       a.click();
-      window.URL.revokeObjectURL(downloadUrl);
       document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 2000);
     } catch (err: any) {
       setErrorMessage(err.response?.data?.message || 'Failed to download document.');
     }
   };
 
   const handleViewGenericDoc = async (docId: string, fileName: string) => {
-    try {
-      const res = await apiClient.get(API_ENDPOINTS.CUSTOMER_DOCS.FILE(docId), {
-        responseType: 'blob',
-      });
-      const blob = new Blob([res.data], { type: res.headers['content-type'] || 'application/pdf' });
-      const blobUrl = window.URL.createObjectURL(blob);
-      setPreviewUrl(blobUrl);
-      setPreviewTitle(fileName);
-      setCurrentDownloadFn(() => () => handleDownloadBlob(API_ENDPOINTS.CUSTOMER_DOCS.FILE(docId), fileName));
-      setPreviewOpen(true);
-    } catch (err: any) {
-      setErrorMessage(err.response?.data?.message || 'Could not open document.');
-    }
+    setPreviewTitle(fileName);
+    setCurrentDownloadFn(() => () => handleDownloadBlob(API_ENDPOINTS.CUSTOMER_DOCS.FILE(docId), fileName));
+    await docPdfViewer.fetchAndOpen(API_ENDPOINTS.CUSTOMER_DOCS.FILE(docId));
   };
 
   // Status badges
@@ -720,15 +703,14 @@ export const CustomerDocuments: React.FC = () => {
 
                       <div className="pt-3 mt-2 border-t border-[#D6E4F5] flex items-center justify-between">
                         {doc ? (
-                          <a
-                            href={`/api/customer/documents/${doc.id}/file`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs font-bold text-[#2563EB] hover:underline flex items-center gap-1"
+                          <button
+                            type="button"
+                            onClick={() => handleViewGenericDoc(doc.id, doc.fileName)}
+                            className="text-xs font-bold text-[#2563EB] hover:underline flex items-center gap-1 bg-transparent border-0 cursor-pointer p-0"
                           >
                             <Eye className="w-3.5 h-3.5" />
                             <span>View Document</span>
-                          </a>
+                          </button>
                         ) : (
                           <span className="text-xs text-[#64748B]">Action needed</span>
                         )}
@@ -1723,48 +1705,22 @@ export const CustomerDocuments: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Full Document Viewer Modal */}
-      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-        <DialogContent className="max-w-4xl h-[85vh] flex flex-col p-4">
-          <DialogHeader className="flex flex-row items-center justify-between pb-2 border-b border-border">
-            <div>
-              <DialogTitle className="text-base font-bold text-text-primary">{previewTitle}</DialogTitle>
-              <DialogDescription className="text-xs">
-                Official document preview generated from authoritative storage.
-              </DialogDescription>
-            </div>
-            {currentDownloadFn && (
-              <Button
-                size="sm"
-                onClick={currentDownloadFn}
-                className="bg-primary text-primary-foreground text-xs font-semibold"
-              >
-                <Download className="w-3.5 h-3.5 mr-1" />
-                Download PDF
-              </Button>
-            )}
-          </DialogHeader>
-
-          <div className="flex-1 bg-surface-elevated rounded-xl overflow-hidden mt-2 relative">
-            {previewLoading ? (
-              <div className="flex flex-col items-center justify-center h-full space-y-3">
-                <Loader2 className="w-8 h-8 animate-spin text-primary" />
-                <span className="text-xs text-text-secondary">Rendering document stream...</span>
-              </div>
-            ) : previewUrl ? (
-              <iframe
-                src={previewUrl}
-                title={previewTitle}
-                className="w-full h-full border-0 rounded-xl"
-              />
-            ) : (
-              <div className="flex items-center justify-center h-full text-xs text-text-secondary">
-                Document preview unavailable.
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* PDF Document Viewer Modal — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={docPdfViewer.open}
+        onClose={docPdfViewer.closeModal}
+        blob={docPdfViewer.blob}
+        blobUrl={docPdfViewer.blobUrl}
+        pdfBytes={docPdfViewer.pdfBytes}
+        isImage={docPdfViewer.isImage}
+        loading={docPdfViewer.loading}
+        fetchError={docPdfViewer.error}
+        title={previewTitle || 'Document Preview'}
+        description="Official document preview generated from authoritative storage."
+        downloadFilename={`${(previewTitle || 'document').replace(/\s+/g, '_')}.pdf`}
+        onDownload={currentDownloadFn || undefined}
+        onRetry={docPdfViewer.retry}
+      />
 
       {/* ── APPLY FOR LOAN MODAL ── */}
       <Dialog open={applyModalOpen} onOpenChange={setApplyModalOpen}>

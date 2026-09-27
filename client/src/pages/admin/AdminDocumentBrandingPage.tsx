@@ -2,6 +2,8 @@ import React, { useEffect, useState, useRef } from 'react';
 import { api } from '@/api/client';
 import { API_ENDPOINTS } from '@/api/endpoints';
 import { useBranding } from '@/contexts/BrandingContext';
+import { usePdfViewer } from '@/hooks/usePdfViewer';
+import PdfViewerModal from '@/components/shared/PdfViewerModal';
 import {
   CheckCircle2,
   AlertCircle,
@@ -11,8 +13,6 @@ import {
   Image as ImageIcon,
   Sparkles,
   Check,
-  X,
-  Download,
   Trash2,
   FileText,
   SlidersHorizontal,
@@ -43,11 +43,9 @@ export const AdminDocumentBrandingPage: React.FC = () => {
   const [watermarkPosition, setWatermarkPosition] = useState('CENTER');
   const [primaryLogoUrl, setPrimaryLogoUrl] = useState('');
 
-  // Live PDF Preview Modal State
-  const [previewModalOpen, setPreviewModalOpen] = useState(false);
+  // Live PDF Preview Modal State — using react-pdf canvas renderer
   const [previewType, setPreviewType] = useState<'APPROVAL_LETTER' | 'INVOICE'>('APPROVAL_LETTER');
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewPdfBlobUrl, setPreviewPdfBlobUrl] = useState<string | null>(null);
+  const pdfViewer = usePdfViewer();
 
   const fetchSettings = async () => {
     setLoading(true);
@@ -77,14 +75,7 @@ export const AdminDocumentBrandingPage: React.FC = () => {
     fetchSettings();
   }, []);
 
-  // Cleanup blob URL on unmount
-  useEffect(() => {
-    return () => {
-      if (previewPdfBlobUrl) {
-        URL.revokeObjectURL(previewPdfBlobUrl);
-      }
-    };
-  }, [previewPdfBlobUrl]);
+  // No blob URL cleanup needed — usePdfViewer manages arraybuffer internally
 
   const handleHeaderFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -191,39 +182,13 @@ export const AdminDocumentBrandingPage: React.FC = () => {
 
   const handleOpenPreview = async (type: 'APPROVAL_LETTER' | 'INVOICE') => {
     setPreviewType(type);
-    setPreviewModalOpen(true);
-    setPreviewLoading(true);
     setErrorMessage('');
-
-    if (previewPdfBlobUrl) {
-      URL.revokeObjectURL(previewPdfBlobUrl);
-      setPreviewPdfBlobUrl(null);
-    }
-
-    try {
-      const endpoint =
-        type === 'APPROVAL_LETTER'
-          ? API_ENDPOINTS.SETTINGS.PREVIEW_APPROVAL_LETTER
-          : API_ENDPOINTS.SETTINGS.PREVIEW_INVOICE;
-
-      const res = await api.get(endpoint, { responseType: 'blob', tokenType: 'admin' });
-      const rawBlob = res.data instanceof Blob ? res.data : new Blob([res.data], { type: 'application/pdf' });
-      const blobUrl = URL.createObjectURL(rawBlob);
-      setPreviewPdfBlobUrl(blobUrl);
-    } catch (err: unknown) {
-      console.error('Failed to generate preview PDF:', err);
-      setErrorMessage('Could not generate live preview PDF. Please check server logs.');
-    } finally {
-      setPreviewLoading(false);
-    }
-  };
-
-  const closePreviewModal = () => {
-    setPreviewModalOpen(false);
-    if (previewPdfBlobUrl) {
-      URL.revokeObjectURL(previewPdfBlobUrl);
-      setPreviewPdfBlobUrl(null);
-    }
+    const endpoint =
+      type === 'APPROVAL_LETTER'
+        ? API_ENDPOINTS.SETTINGS.PREVIEW_APPROVAL_LETTER
+        : API_ENDPOINTS.SETTINGS.PREVIEW_INVOICE;
+    // fetchAndOpen opens modal immediately, then fetches bytes via arraybuffer
+    await pdfViewer.fetchAndOpen(endpoint);
   };
 
   if (loading) {
@@ -680,68 +645,20 @@ export const AdminDocumentBrandingPage: React.FC = () => {
         </div>
       </form>
 
-      {/* Live PDF Preview Modal */}
-      {previewModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-5xl h-[90vh] flex flex-col overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center">
-                  <Eye className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-slate-900">
-                    Live PDF Preview: {previewType === 'APPROVAL_LETTER' ? 'Loan Approval Letter' : 'Tax Invoice'}
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Generated authoritatively by server with current branding settings
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                {previewPdfBlobUrl && (
-                  <a
-                    href={previewPdfBlobUrl}
-                    download={previewType === 'APPROVAL_LETTER' ? 'Approval_Letter_Preview.pdf' : 'Invoice_Preview.pdf'}
-                    className="p-2 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
-                    title="Download Preview PDF"
-                  >
-                    <Download className="w-5 h-5" />
-                  </a>
-                )}
-                <button
-                  type="button"
-                  onClick={closePreviewModal}
-                  className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-
-            <div className="flex-1 bg-slate-100 relative overflow-hidden flex items-center justify-center">
-              {previewLoading ? (
-                <div className="flex flex-col items-center gap-3 text-slate-600">
-                  <RefreshCw className="w-8 h-8 text-blue-600 animate-spin" />
-                  <span className="text-sm font-medium">Generating authoritative PDF preview...</span>
-                </div>
-              ) : previewPdfBlobUrl ? (
-                <iframe
-                  src={previewPdfBlobUrl}
-                  title="PDF Preview"
-                  className="w-full h-full border-0"
-                />
-              ) : (
-                <div className="text-center p-8">
-                  <AlertCircle className="w-10 h-10 text-rose-500 mx-auto mb-2" />
-                  <p className="text-sm font-semibold text-slate-800">Preview Generation Error</p>
-                  <p className="text-xs text-slate-500 mt-1">Unable to load PDF preview from server.</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Live PDF Preview Modal — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={pdfViewer.open}
+        onClose={pdfViewer.closeModal}
+        blob={pdfViewer.blob}
+        blobUrl={pdfViewer.blobUrl}
+        pdfBytes={pdfViewer.pdfBytes}
+        loading={pdfViewer.loading}
+        fetchError={pdfViewer.error}
+        title={`Live PDF Preview: ${previewType === 'APPROVAL_LETTER' ? 'Loan Approval Letter' : 'Tax Invoice'}`}
+        description="Generated authoritatively by server with current branding settings"
+        downloadFilename={previewType === 'APPROVAL_LETTER' ? 'Approval_Letter_Preview.pdf' : 'Invoice_Preview.pdf'}
+        onRetry={pdfViewer.retry}
+      />
     </div>
   );
 };

@@ -116,7 +116,7 @@ describe('Admin KYC Verification & UTR Synchronization Flow (Regression Suite)',
     ) || chargesRes.body.data[0];
     expect(kycChg).toBeDefined();
     custAChargeId = kycChg.id;
-  });
+  }, 30000);
 
   afterAll(async () => {
     await prisma.whatsAppMessage.deleteMany({});

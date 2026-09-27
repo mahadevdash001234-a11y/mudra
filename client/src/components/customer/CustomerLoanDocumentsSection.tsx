@@ -14,10 +14,8 @@ import {
   FileSignature,
   Calendar,
   CreditCard,
-  ArrowRight,
   Sparkles,
   Loader2,
-  FileCheck,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -32,6 +30,8 @@ import {
 } from '@/components/ui/dialog';
 import { apiClient } from '@/api/client';
 import { API_ENDPOINTS } from '@/api/endpoints';
+import { usePdfViewer } from '@/hooks/usePdfViewer';
+import PdfViewerModal from '@/components/shared/PdfViewerModal';
 
 export interface LoanDocumentItem {
   id: string;
@@ -127,11 +127,9 @@ export const CustomerLoanDocumentsSection: React.FC<CustomerLoanDocumentsSection
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
 
-  // PDF / Document preview modal state
-  const [previewOpen, setPreviewOpen] = useState<boolean>(false);
+  // PDF / Document preview via react-pdf canvas renderer
+  const docPdfViewer = usePdfViewer();
   const [previewTitle, setPreviewTitle] = useState<string>('');
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = useState<boolean>(false);
   const [downloadBlobFn, setDownloadBlobFn] = useState<(() => void) | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -148,18 +146,6 @@ export const CustomerLoanDocumentsSection: React.FC<CustomerLoanDocumentsSection
   );
   const isKycChargePaid = Boolean(kycCharge && kycCharge.status === 'PAID');
 
-  const processingFeeCharge = charges.find(
-    (c) =>
-      c.name?.toUpperCase().includes('PROCESSING') ||
-      c.remark?.toUpperCase().includes('PROCESSING') ||
-      c.name?.toUpperCase().includes('DEPOSIT')
-  );
-  const isProcessingFeePaid = Boolean(processingFeeCharge && processingFeeCharge.status === 'PAID');
-
-  // Documents uploaded for this loan or overall profile
-  const panDoc = documents.find((d) => d.documentType === 'PAN' && (!d.loanId || d.loanId === loan.id));
-  const hasMandatoryLoanDocs = Boolean(panDoc && panDoc.status !== 'REJECTED' && panDoc.status !== 'REUPLOAD_REQUIRED');
-
   // Is loan in an approved or post-approval state?
   const isSanctioned = [
     'APPROVED',
@@ -174,6 +160,10 @@ export const CustomerLoanDocumentsSection: React.FC<CustomerLoanDocumentsSection
   // DOCUMENT HANDLERS
   // ─────────────────────────────────────────────────────────────────────────────
   const openUploadModal = (docType: string, reuploadDocId?: string) => {
+    if (!isKycApproved) {
+      alert('Complete and verify KYC before uploading loan documents.');
+      return;
+    }
     setSelectedDocType(docType);
     setTargetReuploadDocId(reuploadDocId || null);
     setSelectedFile(null);
@@ -203,6 +193,11 @@ export const CustomerLoanDocumentsSection: React.FC<CustomerLoanDocumentsSection
   };
 
   const handleUploadSubmit = async () => {
+    if (!isKycApproved) {
+      setUploadError('Complete and verify KYC before uploading loan documents.');
+      return;
+    }
+
     if (!selectedFile || !selectedDocType) {
       setUploadError('Please choose a file to upload.');
       return;
@@ -240,58 +235,42 @@ export const CustomerLoanDocumentsSection: React.FC<CustomerLoanDocumentsSection
 
   const handleDownloadBlob = async (url: string, filename: string) => {
     try {
-      const res = await apiClient.get(url, { responseType: 'blob' });
+      const res = await apiClient.get(url, { responseType: 'arraybuffer' });
       const blob = new Blob([res.data], { type: 'application/pdf' });
-      const downloadUrl = window.URL.createObjectURL(blob);
+      const downloadUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = downloadUrl;
       a.download = filename;
       document.body.appendChild(a);
       a.click();
-      window.URL.revokeObjectURL(downloadUrl);
       document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 2000);
     } catch {
       alert('Failed to download document.');
     }
   };
 
   const handleViewPdf = async (url: string, title: string, downloadFn?: () => void) => {
-    try {
-      setPreviewTitle(title);
-      setPreviewLoading(true);
-      setPreviewUrl(null);
-      setDownloadBlobFn(() => downloadFn || null);
-      setPreviewOpen(true);
-
-      const res = await apiClient.get(url, { responseType: 'blob' });
-      const blob = new Blob([res.data], { type: 'application/pdf' });
-      const blobUrl = window.URL.createObjectURL(blob);
-      setPreviewUrl(blobUrl);
-    } catch {
-      alert('Could not load PDF document preview.');
-      setPreviewOpen(false);
-    } finally {
-      setPreviewLoading(false);
-    }
+    setPreviewTitle(title);
+    setDownloadBlobFn(() => downloadFn || null);
+    // fetchAndOpen opens modal immediately and loads PDF bytes via arraybuffer
+    await docPdfViewer.fetchAndOpen(url);
   };
 
   const handleViewGenericDoc = async (docId: string, fileName: string) => {
-    try {
-      const res = await apiClient.get(API_ENDPOINTS.CUSTOMER_DOCS.FILE(docId), {
-        responseType: 'blob',
-      });
-      const blob = new Blob([res.data], { type: res.headers['content-type'] || 'application/pdf' });
-      const blobUrl = window.URL.createObjectURL(blob);
-      setPreviewUrl(blobUrl);
-      setPreviewTitle(fileName);
-      setDownloadBlobFn(() => () => handleDownloadBlob(API_ENDPOINTS.CUSTOMER_DOCS.FILE(docId), fileName));
-      setPreviewOpen(true);
-    } catch {
-      alert('Could not open document.');
-    }
+    setPreviewTitle(fileName);
+    setDownloadBlobFn(() => () => handleDownloadBlob(API_ENDPOINTS.CUSTOMER_DOCS.FILE(docId), fileName));
+    await docPdfViewer.fetchAndOpen(API_ENDPOINTS.CUSTOMER_DOCS.FILE(docId));
   };
 
   const getDocStatusBadge = (status: string) => {
+    if (!isKycApproved) {
+      return (
+        <Badge className="bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold">
+          <Lock className="w-3 h-3 mr-1 text-amber-600" /> KYC Verification Required
+        </Badge>
+      );
+    }
     switch (status) {
       case 'APPROVED':
         return (
@@ -325,8 +304,6 @@ export const CustomerLoanDocumentsSection: React.FC<CustomerLoanDocumentsSection
         );
     }
   };
-
-  const approvalNo = loan.approvalNumber || loan.accountNumber || loan.applicationNumber;
 
   return (
     <div className={isCompact ? "space-y-3.5" : "space-y-5"}>
@@ -363,190 +340,162 @@ export const CustomerLoanDocumentsSection: React.FC<CustomerLoanDocumentsSection
         </div>
       )}
 
-      {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* STAGE 1: BEFORE KYC VERIFICATION                                    */}
-      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* STAGE-GATED LOCKED BANNER WHEN KYC IS NOT APPROVED */}
       {!isKycApproved && (
-        <Card className="border border-[#D6E4F5] bg-[#F7FAFF] rounded-2xl shadow-xs">
-          <CardContent className="p-5 sm:p-6 text-center space-y-3">
-            <div className="w-12 h-12 rounded-2xl bg-white border border-[#D6E4F5] text-[#2563EB] flex items-center justify-center mx-auto shadow-xs">
-              <Lock className="w-6 h-6 text-[#2563EB]" />
+        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <Lock className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <h4 className="font-bold text-amber-950 text-sm mb-0.5">Loan Application Documents Locked</h4>
+              <p className="leading-relaxed">Complete and verify KYC before uploading loan documents.</p>
             </div>
-            <div className="space-y-1 max-w-md mx-auto">
-              <h4 className="text-sm sm:text-base font-bold text-[#0F172A]">
-                KYC Identity Verification Required
-              </h4>
-              <p className="text-xs text-[#64748B] leading-relaxed">
-                To protect your financial identity, loan documents unlock after your <strong>Aadhaar Card (Front & Back)</strong> has been inspected and verified by our compliance team.
-              </p>
-            </div>
-            <div className="pt-2 flex justify-center">
-              <Button
-                size="sm"
-                onClick={() => navigate('/customer/kyc')}
-                className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs h-9 px-5 rounded-xl shadow-sm flex items-center gap-1.5"
-              >
-                <ShieldCheck className="w-4 h-4" />
-                <span>Complete KYC Verification</span>
-                <ArrowRight className="w-3.5 h-3.5 ml-1" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* STAGE 3: KYC VERIFIED &rarr; LOAN DOCUMENTS UNLOCKED                */}
-      {/* ─────────────────────────────────────────────────────────────────── */}
-      {isKycApproved && (
-        <div className="space-y-4">
-          {/* Non-blocking reminder if KYC charge is pending */}
-          {!isKycChargePaid && (
-            <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <CreditCard className="w-4 h-4 text-amber-600 shrink-0" />
-                <span>KYC Identity Approved. You may upload loan documents below while completing the KYC verification fee.</span>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => navigate('/customer/payments')}
-                className="h-7 text-xs border-amber-300 text-amber-800 hover:bg-amber-100 shrink-0"
-              >
-                Pay KYC Fee
-              </Button>
-            </div>
-          )}
-          {/* Workflow Stage Banner */}
-          <div className="p-3.5 rounded-xl bg-[#EFF6FF] border border-[#D6E4F5] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-lg bg-[#2563EB] text-white flex items-center justify-center shrink-0">
-                <FileCheck className="w-4 h-4" />
-              </div>
-              <div>
-                <p className="font-bold text-[#0F172A]">Loan Documents Active</p>
-                <p className="text-[#64748B] text-[11px]">
-                  Upload required financial documents for loan assessment.
-                </p>
-              </div>
-            </div>
-
-            {hasMandatoryLoanDocs && !isProcessingFeePaid && (
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-[#64748B] font-medium">Next Stage:</span>
-                <Button
-                  size="sm"
-                  onClick={() => navigate('/customer/payments')}
-                  className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold text-xs h-7.5 px-3 rounded-lg shadow-xs"
-                >
-                  Pay Processing Fee →
-                </Button>
-              </div>
-            )}
           </div>
-
-          {/* Grid of Loan Documents */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-            {LOAN_DOC_CONFIG.map((cfg) => {
-              const doc = documents.find(
-                (d) => d.documentType === cfg.type && (!d.loanId || d.loanId === loan.id)
-              );
-              const status = doc ? doc.status : 'NOT_UPLOADED';
-
-              return (
-                <Card
-                  key={cfg.type}
-                  className="bg-white border border-[#D6E4F5] rounded-xl shadow-xs flex flex-col justify-between hover:border-[#2563EB]/40 transition-colors"
-                >
-                  <CardHeader className="p-4 pb-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="space-y-0.5">
-                        <div className="flex items-center gap-2">
-                          <CardTitle className="text-sm font-bold text-[#0F172A]">
-                            {cfg.title}
-                          </CardTitle>
-                          {cfg.required && (
-                            <span className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 px-1.5 py-0.2 rounded">
-                              Required
-                            </span>
-                          )}
-                        </div>
-                        <CardDescription className="text-xs text-[#64748B]">
-                          {cfg.description}
-                        </CardDescription>
-                      </div>
-                      <div>{getDocStatusBadge(status)}</div>
-                    </div>
-                  </CardHeader>
-
-                  <CardContent className="p-4 pt-2 space-y-3">
-                    {/* Review Feedback if Rejected or Correction Required */}
-                    {doc && (doc.status === 'REUPLOAD_REQUIRED' || doc.status === 'REJECTED') && doc.rejectionReason && (
-                      <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs">
-                        <span className="font-bold block text-[11px] mb-0.5">Reviewer Note:</span>
-                        <p className="text-[11px] leading-tight">{doc.rejectionReason}</p>
-                      </div>
-                    )}
-
-                    {/* Uploaded File Info */}
-                    {doc && (
-                      <div className="p-2.5 rounded-lg bg-[#F7FAFF] border border-[#D6E4F5] flex items-center justify-between text-xs">
-                        <div className="truncate mr-2">
-                          <p className="font-semibold text-[#0F172A] truncate text-[11px]">{doc.fileName}</p>
-                          <p className="text-[10px] text-[#64748B]">
-                            {(doc.fileSize / 1024).toFixed(1)} KB • v{doc.version} • {new Date(doc.uploadedAt).toLocaleDateString('en-IN')}
-                          </p>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleViewGenericDoc(doc.id, doc.fileName)}
-                          className="h-7 px-2 text-xs text-[#2563EB] hover:bg-[#EFF6FF] shrink-0 font-semibold"
-                        >
-                          <Eye className="w-3.5 h-3.5 mr-1" />
-                          View
-                        </Button>
-                      </div>
-                    )}
-
-                    {/* Actions */}
-                    <div className="flex items-center justify-end gap-2 pt-1 border-t border-[#D6E4F5]/60">
-                      {!doc ? (
-                        <Button
-                          size="sm"
-                          onClick={() => openUploadModal(cfg.type)}
-                          className="w-full sm:w-auto h-8 px-3 text-xs bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold rounded-lg shadow-xs flex items-center gap-1.5"
-                        >
-                          <Upload className="w-3.5 h-3.5" />
-                          <span>Upload {cfg.title}</span>
-                        </Button>
-                      ) : doc.status === 'REUPLOAD_REQUIRED' || doc.status === 'REJECTED' ? (
-                        <Button
-                          size="sm"
-                          onClick={() => openUploadModal(cfg.type, doc.id)}
-                          className="w-full sm:w-auto h-8 px-3 text-xs bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg shadow-xs flex items-center gap-1.5"
-                        >
-                          <RotateCw className="w-3.5 h-3.5" />
-                          <span>Re-upload Corrected</span>
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => openUploadModal(cfg.type, doc.id)}
-                          className="text-xs text-[#64748B] hover:text-[#0F172A] h-7"
-                        >
-                          <span>Replace File</span>
-                        </Button>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
+          <Button
+            size="sm"
+            onClick={() => navigate('/customer/kyc')}
+            className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs h-8 px-4 rounded-xl shadow-xs shrink-0 flex items-center gap-1"
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>Complete KYC</span>
+          </Button>
         </div>
       )}
+
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* LOAN DOCUMENTS CHECKLIST GRID (ALWAYS VISIBLE, LOCKED WHEN PRE-KYC) */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      <div className="space-y-4">
+        {/* Non-blocking reminder if KYC charge is pending */}
+        {isKycApproved && !isKycChargePaid && (
+          <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <CreditCard className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>KYC Identity Approved. You may upload loan documents below while completing the KYC verification fee.</span>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => navigate('/customer/payments')}
+              className="h-7 text-xs border-amber-300 text-amber-800 hover:bg-amber-100 shrink-0"
+            >
+              Pay KYC Fee
+            </Button>
+          </div>
+        )}
+
+        {/* Grid of Loan Documents */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+          {LOAN_DOC_CONFIG.map((cfg) => {
+            const doc = documents.find(
+              (d) => d.documentType === cfg.type && (!d.loanId || d.loanId === loan.id)
+            );
+            const status = doc ? doc.status : 'NOT_UPLOADED';
+
+            return (
+              <Card
+                key={cfg.type}
+                className="bg-white border border-[#D6E4F5] rounded-xl shadow-xs flex flex-col justify-between hover:border-[#2563EB]/40 transition-colors"
+              >
+                <CardHeader className="p-4 pb-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <CardTitle className="text-sm font-bold text-[#0F172A]">
+                          {cfg.title}
+                        </CardTitle>
+                        {cfg.required && (
+                          <span className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 px-1.5 py-0.2 rounded">
+                            Required
+                          </span>
+                        )}
+                      </div>
+                      <CardDescription className="text-xs text-[#64748B]">
+                        {cfg.description}
+                      </CardDescription>
+                    </div>
+                    <div>{getDocStatusBadge(status)}</div>
+                  </div>
+                </CardHeader>
+
+                <CardContent className="p-4 pt-2 space-y-3">
+                  {/* Review Feedback if Rejected or Correction Required */}
+                  {doc && (doc.status === 'REUPLOAD_REQUIRED' || doc.status === 'REJECTED') && doc.rejectionReason && (
+                    <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs">
+                      <span className="font-bold block text-[11px] mb-0.5">Reviewer Note:</span>
+                      <p className="text-[11px] leading-tight">{doc.rejectionReason}</p>
+                    </div>
+                  )}
+
+                  {/* Uploaded File Info */}
+                  {doc && (
+                    <div className="p-2.5 rounded-lg bg-[#F7FAFF] border border-[#D6E4F5] flex items-center justify-between text-xs">
+                      <div className="truncate mr-2">
+                        <p className="font-semibold text-[#0F172A] truncate text-[11px]">{doc.fileName}</p>
+                        <p className="text-[10px] text-[#64748B]">
+                          {(doc.fileSize / 1024).toFixed(1)} KB • v{doc.version} • {new Date(doc.uploadedAt).toLocaleDateString('en-IN')}
+                        </p>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleViewGenericDoc(doc.id, doc.fileName)}
+                        className="h-7 px-2 text-xs text-[#2563EB] hover:bg-[#EFF6FF] shrink-0 font-semibold"
+                      >
+                        <Eye className="w-3.5 h-3.5 mr-1" />
+                        View
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  <div className="flex items-center justify-end gap-2 pt-1 border-t border-[#D6E4F5]/60">
+                    {!isKycApproved ? (
+                      <Button
+                        size="sm"
+                        disabled={true}
+                        onClick={() => {
+                          alert('Complete and verify KYC before uploading loan documents.');
+                        }}
+                        className="w-full sm:w-auto h-8 px-3 text-xs bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed flex items-center gap-1.5 opacity-60"
+                      >
+                        <Lock className="w-3.5 h-3.5" />
+                        <span>Upload Locked</span>
+                      </Button>
+                    ) : !doc ? (
+                      <Button
+                        size="sm"
+                        onClick={() => openUploadModal(cfg.type)}
+                        className="w-full sm:w-auto h-8 px-3 text-xs bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>Upload {cfg.title}</span>
+                      </Button>
+                    ) : doc.status === 'REUPLOAD_REQUIRED' || doc.status === 'REJECTED' ? (
+                      <Button
+                        size="sm"
+                        onClick={() => openUploadModal(cfg.type, doc.id)}
+                        className="w-full sm:w-auto h-8 px-3 text-xs bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <RotateCw className="w-3.5 h-3.5" />
+                        <span>Re-upload Corrected</span>
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => openUploadModal(cfg.type, doc.id)}
+                        className="text-xs text-[#64748B] hover:text-[#0F172A] h-7 cursor-pointer"
+                      >
+                        <span>Replace File</span>
+                      </Button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      </div>
 
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* STAGE 5: SANCTIONED DOCUMENTS (APPROVAL LETTER, AGREEMENT, EMI, INVOICES) */}
@@ -599,17 +548,18 @@ export const CustomerLoanDocumentsSection: React.FC<CustomerLoanDocumentsSection
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() =>
+                    onClick={() => {
+                      const approvalNum = loan.approvalNumber || loan.applicationNumber;
                       handleViewPdf(
                         `/customer/loans/${loan.id}/approval-letter/pdf`,
-                        `Approval Letter - ${approvalNo}`,
+                        `Approval Letter - ${approvalNum}`,
                         () =>
                           handleDownloadBlob(
                             `/customer/loans/${loan.id}/approval-letter/pdf?download=true`,
-                            `Approval_Letter_${approvalNo}.pdf`
+                            `Approval_Letter_${approvalNum}.pdf`
                           )
-                      )
-                    }
+                      );
+                    }}
                     className="flex-1 text-xs h-8 border-[#D6E4F5] text-[#0F172A] hover:bg-[#EFF6FF]"
                   >
                     <Eye className="w-3.5 h-3.5 mr-1 text-[#2563EB]" />
@@ -617,12 +567,13 @@ export const CustomerLoanDocumentsSection: React.FC<CustomerLoanDocumentsSection
                   </Button>
                   <Button
                     size="sm"
-                    onClick={() =>
+                    onClick={() => {
+                      const approvalNum = loan.approvalNumber || loan.applicationNumber;
                       handleDownloadBlob(
                         `/customer/loans/${loan.id}/approval-letter/pdf?download=true`,
-                        `Approval_Letter_${approvalNo}.pdf`
-                      )
-                    }
+                        `Approval_Letter_${approvalNum}.pdf`
+                      );
+                    }}
                     className="flex-1 text-xs h-8 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold"
                   >
                     <Download className="w-3.5 h-3.5 mr-1" />
@@ -810,47 +761,23 @@ export const CustomerLoanDocumentsSection: React.FC<CustomerLoanDocumentsSection
       </Dialog>
 
       {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* PDF / DOCUMENT VIEWER MODAL                                         */}
+      {/* PDF / DOCUMENT VIEWER MODAL — native in-app Blob rendering          */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-        <DialogContent className="max-w-4xl w-full h-[85vh] bg-white border border-[#D6E4F5] rounded-2xl flex flex-col p-4">
-          <DialogHeader className="pb-2 border-b border-[#D6E4F5]">
-            <div className="flex items-center justify-between">
-              <DialogTitle className="text-sm font-bold text-[#0F172A]">
-                {previewTitle}
-              </DialogTitle>
-              {downloadBlobFn && (
-                <Button
-                  size="sm"
-                  onClick={downloadBlobFn}
-                  className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs h-7 px-3 mr-6 font-semibold"
-                >
-                  <Download className="w-3.5 h-3.5 mr-1" />
-                  Download
-                </Button>
-              )}
-            </div>
-          </DialogHeader>
-
-          <div className="flex-1 w-full h-full bg-[#F7FAFF] rounded-xl overflow-hidden mt-2 relative">
-            {previewLoading ? (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <Loader2 className="w-8 h-8 text-[#2563EB] animate-spin" />
-              </div>
-            ) : previewUrl ? (
-              <iframe
-                src={previewUrl}
-                title={previewTitle}
-                className="w-full h-full border-none rounded-xl"
-              />
-            ) : (
-              <div className="flex items-center justify-center h-full text-xs text-[#64748B]">
-                Unable to load document preview.
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <PdfViewerModal
+        open={docPdfViewer.open}
+        onClose={docPdfViewer.closeModal}
+        blob={docPdfViewer.blob}
+        blobUrl={docPdfViewer.blobUrl}
+        pdfBytes={docPdfViewer.pdfBytes}
+        isImage={docPdfViewer.isImage}
+        loading={docPdfViewer.loading}
+        fetchError={docPdfViewer.error}
+        title={previewTitle || 'Document Preview'}
+        description="Authenticated document viewer"
+        downloadFilename={`${(previewTitle || 'document').replace(/\s+/g, '_')}.pdf`}
+        onDownload={downloadBlobFn || undefined}
+        onRetry={docPdfViewer.retry}
+      />
     </div>
   );
 };

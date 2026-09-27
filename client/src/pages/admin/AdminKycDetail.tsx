@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import { apiClient } from '@/api/client';
 import { API_ENDPOINTS } from '@/api/endpoints';
+import { usePdfViewer } from '@/hooks/usePdfViewer';
+import PdfViewerModal from '@/components/shared/PdfViewerModal';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -93,6 +95,11 @@ export const AdminKycDetail: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // PDF Viewer state via react-pdf canvas renderer
+  const pdfViewer = usePdfViewer();
+  const [pdfTitle, setPdfTitle] = useState<string>('');
+  const [pdfDownloadName, setPdfDownloadName] = useState<string>('document.pdf');
 
   // Review Dialog State
   const [reviewModalOpen, setReviewModalOpen] = useState<boolean>(false);
@@ -198,13 +205,9 @@ export const AdminKycDetail: React.FC = () => {
 
   const handleOpenDocumentFile = async (documentId: string, fileName: string) => {
     try {
-      const res = await apiClient.get(API_ENDPOINTS.ADMIN.DOCUMENT_FILE(documentId), {
-        responseType: 'blob',
-      });
-      const blob = new Blob([res.data], { type: res.headers['content-type'] });
-      const url = window.URL.createObjectURL(blob);
-      window.open(url, '_blank');
-      setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+      setPdfTitle(`KYC Document — ${fileName}`);
+      setPdfDownloadName(fileName);
+      await pdfViewer.fetchAndOpen(API_ENDPOINTS.ADMIN.DOCUMENT_FILE(documentId));
     } catch {
       setErrorMessage(`Failed to open document "${fileName}". Please try again.`);
     }
@@ -735,11 +738,12 @@ export const AdminKycDetail: React.FC = () => {
                       <Button
                         size="sm"
                         variant="outline"
+                        title="Request Document Correction"
                         onClick={() => handleOpenReviewModal(doc, 'REQUEST_REUPLOAD')}
                         className="text-xs text-warning hover:bg-warning/10"
                       >
                         <RotateCw className="w-3.5 h-3.5 mr-1" />
-                        <span>Re-upload</span>
+                        <span>Request Correction</span>
                       </Button>
                       <Button
                         size="sm"
@@ -961,6 +965,21 @@ export const AdminKycDetail: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Document Viewer Modal — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={pdfViewer.open}
+        onClose={pdfViewer.closeModal}
+        blob={pdfViewer.blob}
+        blobUrl={pdfViewer.blobUrl}
+        pdfBytes={pdfViewer.pdfBytes}
+        isImage={pdfViewer.isImage}
+        loading={pdfViewer.loading}
+        fetchError={pdfViewer.error}
+        title={pdfTitle || 'Document Viewer'}
+        downloadFilename={pdfDownloadName || 'document.pdf'}
+        onRetry={pdfViewer.retry}
+      />
     </div>
   );
 };

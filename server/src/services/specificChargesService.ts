@@ -507,7 +507,7 @@ export class SpecificChargesService {
 
     // Other specific charges (GST, Stamp Duty, TDS, Insurance, Processing Fee, etc.)
     // are ONLY visible if they are paid or have been explicitly sent/activated by admin (sentAt !== null)
-    return allCharges.filter((c) => {
+    const filtered = allCharges.filter((c) => {
       if (c.name.includes('KYC')) return true;
       if (c.name.includes('Loan Document') || c.name.includes('Document Upload Fee')) {
         // Only return if enabled by Admin or already PAID
@@ -516,19 +516,75 @@ export class SpecificChargesService {
       if (c.name.includes('Processing')) return c.sentAt !== null && c.isActive;
       return (c.sentAt !== null && c.isActive) || c.status === 'PAID';
     });
+
+    // Deduplicate charges by name, preserving PAID / latest valid charge
+    const chargeMap = new Map<string, typeof filtered[0]>();
+    for (const c of filtered) {
+      const key = c.name.trim();
+      const existing = chargeMap.get(key);
+      if (!existing) {
+        chargeMap.set(key, c);
+      } else {
+        if (existing.status !== 'PAID' && c.status === 'PAID') {
+          chargeMap.set(key, c);
+        } else if (existing.status !== 'PAID' && c.status === 'UNDER_VERIFICATION' && c.transactionRef) {
+          chargeMap.set(key, c);
+        }
+      }
+    }
+
+    return Array.from(chargeMap.values());
   }
 
   /**
    * Get single charge by ID
    */
-  async getChargeById(chargeId: string) {
-    const charge = await prisma.charge.findUnique({
-      where: { id: chargeId },
+  async getChargeById(idOrChargeId: string) {
+    let charge = await prisma.charge.findUnique({
+      where: { id: idOrChargeId },
       include: {
         customer: true,
         loan: true,
       },
     });
+
+    if (!charge) {
+      // Look up by Invoice ID or Invoice Number if caller passed an invoice reference
+      const invoice = await prisma.invoice.findFirst({
+        where: {
+          OR: [
+            { id: idOrChargeId },
+            { chargeId: idOrChargeId },
+            { invoiceNumber: idOrChargeId },
+          ],
+        },
+      });
+
+      if (invoice?.chargeId) {
+        charge = await prisma.charge.findUnique({
+          where: { id: invoice.chargeId },
+          include: {
+            customer: true,
+            loan: true,
+          },
+        });
+      }
+    }
+
+    if (!charge) {
+      charge = await prisma.charge.findFirst({
+        where: {
+          OR: [
+            { paymentId: idOrChargeId },
+            { transactionRef: idOrChargeId },
+          ],
+        },
+        include: {
+          customer: true,
+          loan: true,
+        },
+      });
+    }
 
     if (!charge) {
       throw new AppError(404, 'Specific charge record not found.');
@@ -1130,6 +1186,9 @@ export class SpecificChargesService {
     const authoritativeAmount = charge.amount;
     const paymentMethod = input.paymentMethod || 'UPI';
     const receiptNum = `REC-CHG-${Date.now().toString().slice(-6)}`;
+    const isKycCharge = charge.name?.toUpperCase().includes('KYC') || charge.remark?.toUpperCase().includes('KYC');
+    const isGstCharge = charge.name?.toUpperCase().includes('GST') || charge.remark?.toUpperCase().includes('GST');
+    const effectivePaymentType = isKycCharge ? 'KYC_CHARGES' : isGstCharge ? 'GST_CHARGES' : 'PROCESSING_FEE';
 
     // Create or update Payment record
     let payment;
@@ -1139,7 +1198,7 @@ export class SpecificChargesService {
         data: {
           transactionRef: cleanUtr,
           paymentMethod,
-          paymentType: 'PROCESSING_FEE',
+          paymentType: effectivePaymentType,
           status: 'UNDER_VERIFICATION',
           notes: `Specific Charge: ${charge.name} (${charge.id}) - ${input.notes || ''}`,
           amount: authoritativeAmount,
@@ -1179,7 +1238,7 @@ export class SpecificChargesService {
           customerId,
           amount: authoritativeAmount,
           paymentMethod,
-          paymentType: 'PROCESSING_FEE',
+          paymentType: effectivePaymentType,
           transactionRef: cleanUtr,
           receiptNumber: receiptNum,
           status: 'UNDER_VERIFICATION',
@@ -1189,14 +1248,32 @@ export class SpecificChargesService {
       });
     }
 
-    // Link payment with Charge record
+    // Link payment with Charge record and set status to UNDER_VERIFICATION
     const updatedCharge = await prisma.charge.update({
       where: { id: chargeId },
       data: {
         paymentId: payment.id,
         transactionRef: cleanUtr,
+        status: 'UNDER_VERIFICATION',
       },
     });
+
+    // Update Loan paymentStatus if linked to a loan application
+    if (updatedCharge.loanId) {
+      await prisma.loanApplication.update({
+        where: { id: updatedCharge.loanId },
+        data: { paymentStatus: 'UNDER_VERIFICATION' },
+      });
+    }
+
+    // If this is a KYC charge and customer's kycStatus is PENDING, transition to UNDER_REVIEW
+    const custRecord = await prisma.customer.findUnique({ where: { id: customerId } });
+    if (isKycCharge && custRecord && custRecord.kycStatus === 'PENDING') {
+      await prisma.customer.update({
+        where: { id: customerId },
+        data: { kycStatus: 'UNDER_REVIEW' },
+      });
+    }
 
     // Notify Admin
     await prisma.notification.create({
@@ -1271,7 +1348,7 @@ export class SpecificChargesService {
 
     // 2. Update Charge record
     const updatedCharge = await prisma.charge.update({
-      where: { id: chargeId },
+      where: { id: charge.id },
       data: {
         status: 'PAID',
         paidAt: now,
@@ -1338,37 +1415,35 @@ export class SpecificChargesService {
         'application/pdf'
       );
 
-      // Create or update Invoice model record if loanId is present (Unique chargeId ensures 1:1 idempotency)
-      const effectiveLoanId = charge.loanId || loanApp?.id;
-      if (effectiveLoanId) {
-        invoiceRecord = await prisma.invoice.upsert({
-          where: { chargeId: charge.id },
-          create: {
-            invoiceNumber: invoiceNum,
-            customerId: charge.customerId || customer?.id || '',
-            loanId: effectiveLoanId,
-            chargeId: charge.id,
-            paymentId: charge.paymentId,
-            chargeName: charge.name,
-            amount: charge.amount,
-            taxAmount: Math.round(charge.amount * 0.18),
-            totalAmount: Math.round(charge.amount * 1.18),
-            currency: 'INR',
-            status: 'PAID',
-            storageKey: storageResult.storageKey,
-            filePath: storageResult.filePath,
-            fileUrl: `/api/customer/documents/${uniqueFileId}/file`,
-            templateVersion: 'v1.0',
-            brandingVersion: 'v1.0',
-            issuedAt: now,
-          },
-          update: {
-            storageKey: storageResult.storageKey,
-            filePath: storageResult.filePath,
-            status: 'PAID',
-          },
-        });
-      }
+      // Create or update Invoice model record (Unique chargeId ensures 1:1 idempotency)
+      const effectiveLoanId = charge.loanId || loanApp?.id || null;
+      invoiceRecord = await prisma.invoice.upsert({
+        where: { chargeId: charge.id },
+        create: {
+          invoiceNumber: invoiceNum,
+          customerId: charge.customerId || customer?.id || '',
+          loanId: effectiveLoanId,
+          chargeId: charge.id,
+          paymentId: charge.paymentId,
+          chargeName: charge.name,
+          amount: charge.amount,
+          taxAmount: Math.round(charge.amount * 0.18),
+          totalAmount: Math.round(charge.amount * 1.18),
+          currency: 'INR',
+          status: 'PAID',
+          storageKey: storageResult.storageKey,
+          filePath: storageResult.filePath,
+          fileUrl: `/api/customer/documents/${uniqueFileId}/file`,
+          templateVersion: 'v1.0',
+          brandingVersion: 'v1.0',
+          issuedAt: now,
+        },
+        update: {
+          storageKey: storageResult.storageKey,
+          filePath: storageResult.filePath,
+          status: 'PAID',
+        },
+      });
 
       // Register in LoanDocument for Customer Document Center integration
       await prisma.loanDocument.create({

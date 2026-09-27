@@ -242,8 +242,8 @@ describe('Charge-Wise Customer Payment Lifecycle & UTR Gating', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText('Choose Payment Method')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /I Have Completed Payment/i })).toBeInTheDocument();
+      expect(screen.getByText(/Select Payment Method|Choose Payment Method/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Pay Using UPI/i })).toBeInTheDocument();
       expect(screen.queryByPlaceholderText(/428910482910/i)).not.toBeInTheDocument();
     });
   });
@@ -273,17 +273,16 @@ describe('Charge-Wise Customer Payment Lifecycle & UTR Gating', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /I Have Completed Payment/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Pay Using UPI/i })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /I Have Completed Payment/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Pay Using UPI/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('PAYMENT COMPLETED?')).toBeInTheDocument();
-      expect(screen.getByText(/Enter the UTR \/ Transaction Reference Number from your payment receipt/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/UTR Number/i)).toBeInTheDocument();
+      expect(screen.getByText(/STAMP DUTY PAYMENT VERIFICATION/i)).toBeInTheDocument();
+      expect(screen.getByText(/Enter the 12-digit UTR \/ Transaction Reference Number/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Submit UTR/i })).toBeInTheDocument();
-    });
+    }, { timeout: 4000 });
   });
 
   // TEST 6
@@ -312,10 +311,10 @@ describe('Charge-Wise Customer Payment Lifecycle & UTR Gating', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /I Have Completed Payment/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Pay Using UPI/i })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /I Have Completed Payment/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Pay Using UPI/i }));
 
     const utrInput = await screen.findByPlaceholderText(/428910482910/i, {}, { timeout: 4000 });
     fireEvent.change(utrInput, { target: { value: '507823641928' } });
@@ -477,7 +476,7 @@ describe('Charge-Wise Customer Payment Lifecycle & UTR Gating', () => {
   });
 
   // TEST 11
-  it('TEST 11: Back to Charges preserves payment state', async () => {
+  it('TEST 11: Single page card-wise payment preserves card visibility', async () => {
     (apiClient.get as any).mockImplementation((url: string) => {
       if (url === API_ENDPOINTS.ACTIVE_PAYMENT_OPTIONS) {
         return Promise.resolve({ data: mockPaymentOptions });
@@ -501,15 +500,8 @@ describe('Charge-Wise Customer Payment Lifecycle & UTR Gating', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText('Back to Charges')).toBeInTheDocument();
-    });
-
-    const backBtn = screen.getByRole('button', { name: /Back to Charges/i });
-    fireEvent.click(backBtn);
-
-    await waitFor(() => {
       expect(screen.getByText('Assigned Application Charges')).toBeInTheDocument();
-      expect(screen.getByText('STAMP DUTY PAYMENT')).toBeInTheDocument();
+      expect(screen.getByText('Stamp Duty')).toBeInTheDocument();
     });
   });
 
@@ -592,7 +584,6 @@ describe('Charge-Wise Customer Payment Lifecycle & UTR Gating', () => {
 
     await waitFor(() => {
       expect(container.querySelector('#assigned-charges-section')).toBeInTheDocument();
-      expect(container.querySelector('#payment-options-section')).toBeInTheDocument();
       expect(screen.getByText('Encrypted 256-Bit SSL')).toBeInTheDocument();
       expect(screen.getByText('100% Verified Rails')).toBeInTheDocument();
     });

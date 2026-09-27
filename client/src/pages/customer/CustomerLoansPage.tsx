@@ -31,6 +31,8 @@ import {
 import { useBrandTitle } from '@/hooks/useBrandTitle';
 import { apiClient } from '@/api/client';
 import { API_ENDPOINTS } from '@/api/endpoints';
+import { usePdfViewer } from '@/hooks/usePdfViewer';
+import PdfViewerModal from '@/components/shared/PdfViewerModal';
 import { normalizeChargeName } from './CustomerHome';
 
 const LOAN_DOC_CHECKLIST = [
@@ -55,6 +57,9 @@ export const CustomerLoansPage: React.FC = () => {
 
   // Apply Eligibility Modals State
   const [eligibilityState, setEligibilityState] = useState<'NONE' | 'KYC_REQUIRED' | 'DOCS_REQUIRED'>('NONE');
+
+  // Approval letter PDF viewer via react-pdf canvas renderer
+  const letterPdfViewer = usePdfViewer();
 
   // 1. Fetch Customer Loan Applications via loanApi
   const {
@@ -424,15 +429,8 @@ export const CustomerLoansPage: React.FC = () => {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={async () => {
-                      try {
-                        const res = await apiClient.get(`/customer/loans/${activeLoan.id}/approval-letter/pdf`, { responseType: 'blob' });
-                        const blob = new Blob([res.data], { type: 'application/pdf' });
-                        const url = window.URL.createObjectURL(blob);
-                        window.open(url, '_blank');
-                      } catch {
-                        alert('Could not render approval letter.');
-                      }
+                    onClick={() => {
+                      letterPdfViewer.fetchAndOpen(`/customer/loans/${activeLoan.id}/approval-letter/pdf`);
                     }}
                     className="text-xs h-9 px-4 border-[#D6E4F5] text-[#0F172A] hover:bg-[#EFF6FF] font-semibold rounded-xl bg-white"
                   >
@@ -858,6 +856,21 @@ export const CustomerLoansPage: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Approval Letter PDF Viewer Modal — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={letterPdfViewer.open}
+        onClose={letterPdfViewer.closeModal}
+        blob={letterPdfViewer.blob}
+        blobUrl={letterPdfViewer.blobUrl}
+        pdfBytes={letterPdfViewer.pdfBytes}
+        loading={letterPdfViewer.loading}
+        fetchError={letterPdfViewer.error}
+        title="Loan Approval Letter"
+        description="Official sanction document"
+        downloadFilename={`Approval_Letter_${activeLoan?.applicationNumber || 'Loan'}.pdf`}
+        onRetry={letterPdfViewer.retry}
+      />
     </div>
   );
 };

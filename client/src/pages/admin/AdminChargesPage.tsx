@@ -26,6 +26,8 @@ import { Badge } from '@/components/ui/badge';
 import { api } from '@/api/client';
 import { API_ENDPOINTS } from '@/api/endpoints';
 import { SpecificChargesSection } from '@/components/admin/SpecificChargesSection';
+import { usePdfViewer } from '@/hooks/usePdfViewer';
+import PdfViewerModal from '@/components/shared/PdfViewerModal';
 
 type ChargeTypeKey = 'INTEREST_RATE' | 'KYC_CHARGES' | 'PROCESSING_FEE' | 'LOAN_DOC_FEE';
 
@@ -91,8 +93,8 @@ export const AdminChargesPage: React.FC = () => {
   // Action dropdown state for individual table rows
   const [openRowMenuId, setOpenRowMenuId] = useState<string | null>(null);
 
-  // Invoice viewer modal state
-  const [invoiceModalUrl, setInvoiceModalUrl] = useState<string | null>(null);
+  // Invoice viewer — uses react-pdf canvas renderer via PdfViewerModal
+  const invoicePdfViewer = usePdfViewer();
   const [invoiceModalRecord, setInvoiceModalRecord] = useState<FeeRecord | null>(null);
   const [loadingInvoiceId, setLoadingInvoiceId] = useState<string | null>(null);
 
@@ -278,11 +280,8 @@ export const AdminChargesPage: React.FC = () => {
     try {
       setLoadingInvoiceId(record.id);
       setOpenRowMenuId(null);
-      const res: any = await api.get(API_ENDPOINTS.CHARGES.INVOICE(record.id, false), { responseType: 'blob' });
-      const blob = res.data instanceof Blob ? res.data : new Blob([res.data], { type: 'application/pdf' });
-      const url = window.URL.createObjectURL(blob);
-      setInvoiceModalUrl(url);
       setInvoiceModalRecord(record);
+      await invoicePdfViewer.fetchAndOpen(API_ENDPOINTS.CHARGES.INVOICE(record.id, false));
     } catch (err: any) {
       alert(err?.message || 'Failed to generate invoice preview.');
     } finally {
@@ -297,16 +296,16 @@ export const AdminChargesPage: React.FC = () => {
     }
     try {
       setOpenRowMenuId(null);
-      const res: any = await api.get(API_ENDPOINTS.CHARGES.INVOICE(record.id, true), { responseType: 'blob' });
-      const blob = res.data instanceof Blob ? res.data : new Blob([res.data], { type: 'application/pdf' });
-      const url = window.URL.createObjectURL(blob);
+      const res: any = await api.get(API_ENDPOINTS.CHARGES.INVOICE(record.id, true), { responseType: 'arraybuffer' });
+      const blob = res.data instanceof ArrayBuffer ? new Blob([res.data], { type: 'application/pdf' }) : new Blob([res.data], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
       link.download = `Invoice_${record.applicationNumber || record.id}.pdf`;
       document.body.appendChild(link);
       link.click();
-      window.URL.revokeObjectURL(url);
       document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
     } catch (err: any) {
       alert(err?.message || 'Failed to download invoice PDF.');
     }
@@ -1048,54 +1047,24 @@ export const AdminChargesPage: React.FC = () => {
         </div>
       </Card>
 
-      {/* Modal: View PDF Invoice */}
-      {invoiceModalUrl && invoiceModalRecord && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="bg-surface border border-border rounded-2xl w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl overflow-hidden">
-            {/* Modal Header */}
-            <div className="px-5 py-3.5 border-b border-border flex items-center justify-between bg-surface-elevated">
-              <div className="flex items-center gap-2">
-                <FileText className="w-4 h-4 text-primary" />
-                <span className="text-sm font-bold text-text-primary">
-                  Payment Invoice — {invoiceModalRecord.label} ({invoiceModalRecord.applicationNumber || 'N/A'})
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleDownloadInvoice(invoiceModalRecord)}
-                  className="border-border bg-surface hover:bg-surface-elevated text-text-primary text-xs h-8 px-3 rounded-lg flex items-center gap-1.5"
-                >
-                  <Download className="w-3.5 h-3.5 text-success" />
-                  <span>Download</span>
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    if (invoiceModalUrl) window.URL.revokeObjectURL(invoiceModalUrl);
-                    setInvoiceModalUrl(null);
-                    setInvoiceModalRecord(null);
-                  }}
-                  className="text-text-secondary hover:text-text-primary p-1.5 h-8 w-8 rounded-lg"
-                >
-                  <X className="w-4 h-4" />
-                </Button>
-              </div>
-            </div>
-
-            {/* PDF Viewer Iframe */}
-            <div className="flex-1 bg-surface-elevated">
-              <iframe
-                src={invoiceModalUrl}
-                title="Invoice Preview"
-                className="w-full h-full border-none"
-              />
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Invoice Preview Modal — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={invoicePdfViewer.open}
+        onClose={() => {
+          invoicePdfViewer.closeModal();
+          setInvoiceModalRecord(null);
+        }}
+        blob={invoicePdfViewer.blob}
+        blobUrl={invoicePdfViewer.blobUrl}
+        pdfBytes={invoicePdfViewer.pdfBytes}
+        loading={invoicePdfViewer.loading}
+        fetchError={invoicePdfViewer.error}
+        title={invoiceModalRecord ? `Payment Invoice — ${invoiceModalRecord.label} (${invoiceModalRecord.applicationNumber || 'N/A'})` : 'Invoice'}
+        description="Authoritative tax invoice for verified payment"
+        downloadFilename={invoiceModalRecord ? `Invoice_${invoiceModalRecord.applicationNumber || invoiceModalRecord.id}.pdf` : 'invoice.pdf'}
+        onDownload={invoiceModalRecord ? () => handleDownloadInvoice(invoiceModalRecord) : undefined}
+        onRetry={invoicePdfViewer.retry}
+      />
     </div>
   );
 };

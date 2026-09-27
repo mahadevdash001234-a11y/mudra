@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/api/client';
@@ -23,6 +23,8 @@ import {
   Clock,
   Camera,
   Eye,
+  Download,
+  Loader2,
   RefreshCw,
   ArrowRight,
   AlertTriangle,
@@ -34,6 +36,8 @@ import {
   Receipt,
 } from 'lucide-react';
 import { useBrandTitle } from '@/hooks/useBrandTitle';
+import { usePdfViewer } from '@/hooks/usePdfViewer';
+import PdfViewerModal from '@/components/shared/PdfViewerModal';
 
 interface DocumentItem {
   id: string;
@@ -73,7 +77,11 @@ export const CustomerKycPage: React.FC = () => {
   const queryClient = useQueryClient();
 
   const [activeUploadType, setActiveUploadType] = useState<'AADHAAR_FRONT' | 'AADHAAR_BACK' | null>(null);
-  const [file, setFile] = useState<File | null>(null);
+  const [frontFile, setFrontFile] = useState<File | null>(null);
+  const [backFile, setBackFile] = useState<File | null>(null);
+  const frontFileInputRef = useRef<HTMLInputElement | null>(null);
+  const backFileInputRef = useRef<HTMLInputElement | null>(null);
+
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -84,10 +92,71 @@ export const CustomerKycPage: React.FC = () => {
   const [utrError, setUtrError] = useState<string | null>(null);
   const [copiedVpa, setCopiedVpa] = useState(false);
 
-  // Invoice preview state
-  const [invoicePreviewOpen, setInvoicePreviewOpen] = useState(false);
-  const [invoicePreviewUrl, setInvoicePreviewUrl] = useState<string | null>(null);
-  const [invoiceLoading, setInvoiceLoading] = useState(false);
+  // Invoice PDF viewer via react-pdf canvas renderer
+  const invoicePdfViewer = usePdfViewer();
+
+  // Document PDF viewer via react-pdf canvas renderer
+  const docPdfViewer = usePdfViewer();
+
+  // Document image preview state
+  const [docPreviewOpen, setDocPreviewOpen] = useState<boolean>(false);
+  const [docPreviewTitle, setDocPreviewTitle] = useState<string>('');
+  const [docPreviewUrl, setDocPreviewUrl] = useState<string | null>(null);
+  const [docPreviewLoading, setDocPreviewLoading] = useState<boolean>(false);
+  const [docDownloadFn, setDocDownloadFn] = useState<(() => void) | null>(null);
+
+  const handleDownloadDoc = async (docId: string, fileName: string) => {
+    try {
+      const res = await apiClient.get(API_ENDPOINTS.CUSTOMER_DOCS.FILE(docId), {
+        responseType: 'blob',
+      });
+      const contentType = res.headers?.['content-type'] || 'application/octet-stream';
+      const blob = new Blob([res.data], { type: contentType });
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(downloadUrl);
+      document.body.removeChild(a);
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message || 'Failed to download document.';
+      setErrorMessage(msg);
+    }
+  };
+
+  const handleViewDoc = async (docId: string, fileName: string) => {
+    const isPdf = fileName?.toLowerCase().endsWith('.pdf');
+    if (isPdf) {
+      setDocPreviewTitle(fileName);
+      setDocDownloadFn(() => () => handleDownloadDoc(docId, fileName));
+      await docPdfViewer.fetchAndOpen(API_ENDPOINTS.CUSTOMER_DOCS.FILE(docId));
+      return;
+    }
+
+    try {
+      setDocPreviewTitle(fileName);
+      setDocPreviewLoading(true);
+      setDocPreviewUrl(null);
+      setDocDownloadFn(() => () => handleDownloadDoc(docId, fileName));
+      setDocPreviewOpen(true);
+
+      const res = await apiClient.get(API_ENDPOINTS.CUSTOMER_DOCS.FILE(docId), {
+        responseType: 'blob',
+      });
+      const mimeType = res.headers?.['content-type'] || 'image/jpeg';
+      const blob = new Blob([res.data], { type: mimeType });
+      const blobUrl = window.URL.createObjectURL(blob);
+      setDocPreviewUrl(blobUrl);
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message || 'Could not load document preview.';
+      setErrorMessage(msg);
+      setDocPreviewOpen(false);
+    } finally {
+      setDocPreviewLoading(false);
+    }
+  };
 
   // 1. Fetch Profile for KYC status
   const {
@@ -186,7 +255,13 @@ export const CustomerKycPage: React.FC = () => {
       const label = variables.documentType === 'AADHAAR_FRONT' ? 'Aadhaar Card (Front)' : 'Aadhaar Card (Back)';
       setSuccessMessage(`${label} uploaded successfully.`);
       setErrorMessage(null);
-      setFile(null);
+      if (variables.documentType === 'AADHAAR_FRONT') {
+        setFrontFile(null);
+        if (frontFileInputRef.current) frontFileInputRef.current.value = '';
+      } else {
+        setBackFile(null);
+        if (backFileInputRef.current) backFileInputRef.current.value = '';
+      }
       setActiveUploadType(null);
       queryClient.invalidateQueries({ queryKey: ['customer-documents'] });
       queryClient.invalidateQueries({ queryKey: ['customer-dashboard'] });
@@ -253,50 +328,62 @@ export const CustomerKycPage: React.FC = () => {
   const handleViewInvoice = async () => {
     if (!kycCharge) return;
     try {
-      setInvoiceLoading(true);
-      setInvoicePreviewOpen(true);
-      const res = await apiClient.get(
-        API_ENDPOINTS.CUSTOMER_CHARGES.INVOICE(kycCharge.id, false),
-        { responseType: 'blob' }
+      await invoicePdfViewer.fetchAndOpen(
+        API_ENDPOINTS.CUSTOMER_CHARGES.INVOICE(kycCharge.id, false)
       );
-      const blob = new Blob([res.data], { type: 'application/pdf' });
-      const url = window.URL.createObjectURL(blob);
-      setInvoicePreviewUrl(url);
     } catch (err: any) {
       setErrorMessage(err.response?.data?.message || 'Failed to preview invoice PDF.');
-      setInvoicePreviewOpen(false);
-    } finally {
-      setInvoiceLoading(false);
     }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFrontFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const selected = e.target.files[0];
       if (selected.size > 10 * 1024 * 1024) {
         setErrorMessage('File size exceeds the 10 MB limit.');
-        setFile(null);
+        setFrontFile(null);
         e.target.value = '';
         return;
       }
       setErrorMessage(null);
-      setFile(selected);
-      e.target.value = '';
+      setFrontFile(selected);
+    }
+  };
+
+  const handleBackFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const selected = e.target.files[0];
+      if (selected.size > 10 * 1024 * 1024) {
+        setErrorMessage('File size exceeds the 10 MB limit.');
+        setBackFile(null);
+        e.target.value = '';
+        return;
+      }
+      setErrorMessage(null);
+      setBackFile(selected);
     }
   };
 
   const toggleUploadType = (type: 'AADHAAR_FRONT' | 'AADHAAR_BACK') => {
-    setActiveUploadType((prev) => (prev === type ? null : type));
-    setFile(null);
     setErrorMessage(null);
+    if (activeUploadType === type) {
+      setActiveUploadType(null);
+    } else {
+      setActiveUploadType(type);
+    }
+    setFrontFile(null);
+    setBackFile(null);
+    if (frontFileInputRef.current) frontFileInputRef.current.value = '';
+    if (backFileInputRef.current) backFileInputRef.current.value = '';
   };
 
   const handleUploadSubmit = (type: 'AADHAAR_FRONT' | 'AADHAAR_BACK') => {
-    if (!file) {
-      setErrorMessage('Please select a file to upload.');
+    const targetFile = type === 'AADHAAR_FRONT' ? frontFile : backFile;
+    if (!targetFile) {
+      setErrorMessage(`Please select a file for Aadhaar ${type === 'AADHAAR_FRONT' ? 'Front' : 'Back'}.`);
       return;
     }
-    uploadMutation.mutate({ documentType: type, uploadFile: file });
+    uploadMutation.mutate({ documentType: type, uploadFile: targetFile });
   };
 
   // Status Badge Helper
@@ -653,7 +740,7 @@ export const CustomerKycPage: React.FC = () => {
                 {isKycFeePaid ? (
                   <Button
                     onClick={handleViewInvoice}
-                    disabled={invoiceLoading}
+                    disabled={invoicePdfViewer.loading}
                     className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-10 px-5 rounded-xl shadow-xs flex items-center gap-1.5"
                   >
                     <Receipt className="w-4 h-4" />
@@ -755,15 +842,18 @@ export const CustomerKycPage: React.FC = () => {
                   </div>
                   {frontDoc && (
                     <div className="pt-1 border-t border-[#D6E4F5]">
-                      <a
-                        href={`/api/customer/documents/${frontDoc.id}/file`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs font-bold text-[#2563EB] hover:underline flex items-center gap-1"
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDocPreviewTitle('Aadhaar Card — Front Side');
+                          setDocDownloadFn(() => () => handleDownloadDoc(frontDoc.id, frontDoc.fileName || 'Aadhaar_Front.pdf'));
+                          docPdfViewer.fetchAndOpen(API_ENDPOINTS.CUSTOMER_DOCS.FILE(frontDoc.id), frontDoc.fileName || 'Aadhaar_Front.pdf');
+                        }}
+                        className="text-xs font-bold text-[#2563EB] hover:underline flex items-center gap-1 cursor-pointer"
                       >
                         <Eye className="w-3.5 h-3.5" />
                         <span>View File</span>
-                      </a>
+                      </button>
                     </div>
                   )}
                 </div>
@@ -803,15 +893,18 @@ export const CustomerKycPage: React.FC = () => {
                   </div>
                   {backDoc && (
                     <div className="pt-1 border-t border-[#D6E4F5]">
-                      <a
-                        href={`/api/customer/documents/${backDoc.id}/file`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs font-bold text-[#2563EB] hover:underline flex items-center gap-1"
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDocPreviewTitle('Aadhaar Card — Back Side');
+                          setDocDownloadFn(() => () => handleDownloadDoc(backDoc.id, backDoc.fileName || 'Aadhaar_Back.pdf'));
+                          docPdfViewer.fetchAndOpen(API_ENDPOINTS.CUSTOMER_DOCS.FILE(backDoc.id), backDoc.fileName || 'Aadhaar_Back.pdf');
+                        }}
+                        className="text-xs font-bold text-[#2563EB] hover:underline flex items-center gap-1 cursor-pointer"
                       >
                         <Eye className="w-3.5 h-3.5" />
                         <span>View File</span>
-                      </a>
+                      </button>
                     </div>
                   )}
                 </div>
@@ -919,15 +1012,14 @@ export const CustomerKycPage: React.FC = () => {
                     )}
 
                     <div className="flex items-center justify-between pt-1 border-t border-[#D6E4F5]">
-                      <a
-                        href={`/api/customer/documents/${frontDoc.id}/file`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs font-bold text-[#2563EB] hover:underline flex items-center gap-1"
+                      <button
+                        type="button"
+                        onClick={() => handleViewDoc(frontDoc.id, frontDoc.fileName)}
+                        className="text-xs font-bold text-[#2563EB] hover:underline flex items-center gap-1 cursor-pointer bg-transparent border-0 p-0"
                       >
                         <Eye className="w-3.5 h-3.5" />
                         <span>View File</span>
-                      </a>
+                      </button>
                       {(!isKycVerified || frontDoc.status === 'REUPLOAD_REQUIRED') && (
                         <Button
                           size="sm"
@@ -956,11 +1048,12 @@ export const CustomerKycPage: React.FC = () => {
                 {activeUploadType === 'AADHAAR_FRONT' && (!isKycVerified || frontDoc?.status === 'REUPLOAD_REQUIRED') && (
                   <div className="p-3.5 rounded-xl border-2 border-dashed border-[#2563EB]/40 bg-[#EFF6FF]/40 space-y-3 animate-in fade-in">
                     <input
+                      ref={frontFileInputRef}
                       type="file"
                       id="frontFileInput"
                       aria-label="Upload Aadhaar Front"
                       accept="image/jpeg,image/png,image/jpg,application/pdf"
-                      onChange={handleFileChange}
+                      onChange={handleFrontFileChange}
                       className="hidden"
                     />
                     <label
@@ -969,19 +1062,26 @@ export const CustomerKycPage: React.FC = () => {
                     >
                       <Camera className="w-6 h-6 text-[#2563EB] mx-auto mb-1" />
                       <span className="text-xs font-bold text-[#0F172A] block">
-                        {file ? file.name : 'Click to select photo or PDF'}
+                        {frontFile ? frontFile.name : 'Click to select photo or PDF'}
                       </span>
                       <span className="text-[10px] text-[#64748B]">JPG, PNG, PDF up to 10 MB</span>
                     </label>
 
-                    {file && (
+                    {frontFile && (
                       <Button
                         size="sm"
                         onClick={() => handleUploadSubmit('AADHAAR_FRONT')}
                         disabled={uploadMutation.isPending}
-                        className="w-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-bold h-8.5 rounded-lg shadow-sm"
+                        className="w-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-bold h-8.5 rounded-lg shadow-sm cursor-pointer"
                       >
-                        {uploadMutation.isPending ? 'Uploading...' : 'Confirm Upload'}
+                        {uploadMutation.isPending && uploadMutation.variables?.documentType === 'AADHAAR_FRONT' ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
+                            <span>Uploading...</span>
+                          </>
+                        ) : (
+                          'Confirm Upload'
+                        )}
                       </Button>
                     )}
                   </div>
@@ -1048,15 +1148,14 @@ export const CustomerKycPage: React.FC = () => {
                     )}
 
                     <div className="flex items-center justify-between pt-1 border-t border-[#D6E4F5]">
-                      <a
-                        href={`/api/customer/documents/${backDoc.id}/file`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs font-bold text-[#2563EB] hover:underline flex items-center gap-1"
+                      <button
+                        type="button"
+                        onClick={() => handleViewDoc(backDoc.id, backDoc.fileName)}
+                        className="text-xs font-bold text-[#2563EB] hover:underline flex items-center gap-1 cursor-pointer bg-transparent border-0 p-0"
                       >
                         <Eye className="w-3.5 h-3.5" />
                         <span>View File</span>
-                      </a>
+                      </button>
                       {(!isKycVerified || backDoc.status === 'REUPLOAD_REQUIRED') && (
                         <Button
                           size="sm"
@@ -1085,11 +1184,12 @@ export const CustomerKycPage: React.FC = () => {
                 {activeUploadType === 'AADHAAR_BACK' && (!isKycVerified || backDoc?.status === 'REUPLOAD_REQUIRED') && (
                   <div className="p-3.5 rounded-xl border-2 border-dashed border-[#2563EB]/40 bg-[#EFF6FF]/40 space-y-3 animate-in fade-in">
                     <input
+                      ref={backFileInputRef}
                       type="file"
                       id="backFileInput"
                       aria-label="Upload Aadhaar Back"
                       accept="image/jpeg,image/png,image/jpg,application/pdf"
-                      onChange={handleFileChange}
+                      onChange={handleBackFileChange}
                       className="hidden"
                     />
                     <label
@@ -1098,19 +1198,26 @@ export const CustomerKycPage: React.FC = () => {
                     >
                       <Camera className="w-6 h-6 text-[#2563EB] mx-auto mb-1" />
                       <span className="text-xs font-bold text-[#0F172A] block">
-                        {file ? file.name : 'Click to select photo or PDF'}
+                        {backFile ? backFile.name : 'Click to select photo or PDF'}
                       </span>
                       <span className="text-[10px] text-[#64748B]">JPG, PNG, PDF up to 10 MB</span>
                     </label>
 
-                    {file && (
+                    {backFile && (
                       <Button
                         size="sm"
                         onClick={() => handleUploadSubmit('AADHAAR_BACK')}
                         disabled={uploadMutation.isPending}
-                        className="w-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-bold h-8.5 rounded-lg shadow-sm"
+                        className="w-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-bold h-8.5 rounded-lg shadow-sm cursor-pointer"
                       >
-                        {uploadMutation.isPending ? 'Uploading...' : 'Confirm Upload'}
+                        {uploadMutation.isPending && uploadMutation.variables?.documentType === 'AADHAAR_BACK' ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
+                            <span>Uploading...</span>
+                          </>
+                        ) : (
+                          'Confirm Upload'
+                        )}
                       </Button>
                     )}
                   </div>
@@ -1306,34 +1413,78 @@ export const CustomerKycPage: React.FC = () => {
       </Dialog>
 
       {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* DIALOG: INVOICE PREVIEW MODAL                                       */}
-      {/* ─────────────────────────────────────────────────────────────────── */}
-      <Dialog open={invoicePreviewOpen} onOpenChange={setInvoicePreviewOpen}>
-        <DialogContent className="max-w-3xl h-[85vh] p-0 flex flex-col bg-white overflow-hidden rounded-2xl">
-          <DialogHeader className="p-4 border-b border-[#D6E4F5] flex-row items-center justify-between">
-            <DialogTitle className="text-sm font-bold text-[#0F172A] flex items-center gap-2">
-              <Receipt className="w-4 h-4 text-[#2563EB]" />
-              <span>Official Tax Invoice — KYC Verification Fee</span>
-            </DialogTitle>
+      {/* IMAGE DOCUMENT PREVIEW MODAL */}
+      <Dialog open={docPreviewOpen} onOpenChange={setDocPreviewOpen}>
+        <DialogContent className="max-w-4xl w-full max-h-[85vh] bg-white border border-[#D6E4F5] rounded-2xl flex flex-col p-4">
+          <DialogHeader className="pb-2 border-b border-[#D6E4F5]">
+            <div className="flex items-center justify-between">
+              <DialogTitle className="text-sm font-bold text-[#0F172A]">
+                {docPreviewTitle}
+              </DialogTitle>
+              {docDownloadFn && (
+                <Button
+                  size="sm"
+                  onClick={docDownloadFn}
+                  className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs h-7 px-3 mr-6 font-semibold cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5 mr-1" />
+                  Download
+                </Button>
+              )}
+            </div>
           </DialogHeader>
-          <div className="flex-1 w-full bg-slate-100 flex items-center justify-center overflow-hidden">
-            {invoiceLoading ? (
-              <div className="flex flex-col items-center gap-2 text-xs text-[#64748B]">
-                <RefreshCw className="w-6 h-6 animate-spin text-[#2563EB]" />
-                <span>Loading official invoice PDF...</span>
+
+          <div className="flex-1 w-full max-h-[70vh] bg-[#F7FAFF] rounded-xl overflow-auto mt-2 flex items-center justify-center p-4">
+            {docPreviewLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="w-8 h-8 text-[#2563EB] animate-spin" />
               </div>
-            ) : invoicePreviewUrl ? (
-              <iframe
-                src={invoicePreviewUrl}
-                title="KYC Invoice Preview"
-                className="w-full h-full border-none"
+            ) : docPreviewUrl ? (
+              <img
+                src={docPreviewUrl}
+                alt={docPreviewTitle}
+                className="max-h-[65vh] max-w-full object-contain rounded-lg shadow-sm"
               />
             ) : (
-              <span className="text-xs text-red-600">Failed to render PDF preview</span>
+              <div className="flex items-center justify-center py-12 text-xs text-[#64748B]">
+                Unable to load document preview.
+              </div>
             )}
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* INVOICE PDF VIEWER MODAL — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={invoicePdfViewer.open}
+        onClose={invoicePdfViewer.closeModal}
+        blob={invoicePdfViewer.blob}
+        blobUrl={invoicePdfViewer.blobUrl}
+        pdfBytes={invoicePdfViewer.pdfBytes}
+        loading={invoicePdfViewer.loading}
+        fetchError={invoicePdfViewer.error}
+        title="Official Tax Invoice — KYC Verification Fee"
+        description="Official payment receipt & tax invoice"
+        downloadFilename="Invoice_KYC_Verification.pdf"
+        onRetry={invoicePdfViewer.retry}
+      />
+
+      {/* DOCUMENT PDF VIEWER MODAL — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={docPdfViewer.open}
+        onClose={docPdfViewer.closeModal}
+        blob={docPdfViewer.blob}
+        blobUrl={docPdfViewer.blobUrl}
+        pdfBytes={docPdfViewer.pdfBytes}
+        isImage={docPdfViewer.isImage}
+        loading={docPdfViewer.loading}
+        fetchError={docPdfViewer.error}
+        title={docPreviewTitle || 'Document Preview'}
+        description="Uploaded document preview"
+        downloadFilename={docPreviewTitle || 'document.pdf'}
+        onDownload={docDownloadFn || undefined}
+        onRetry={docPdfViewer.retry}
+      />
     </div>
   );
 };

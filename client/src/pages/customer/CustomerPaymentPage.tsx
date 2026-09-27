@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/api/client';
@@ -13,7 +13,6 @@ import {
   Copy,
   Check,
   ShieldCheck,
-  QrCode,
   Landmark,
   ExternalLink,
   Lock,
@@ -25,17 +24,12 @@ import {
   Sparkles,
   Receipt,
 } from 'lucide-react';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog';
 
 import { useBranding } from '@/contexts/BrandingContext';
 import { useBrandTitle } from '@/hooks/useBrandTitle';
 import { normalizeChargeName } from './CustomerHome';
+import { usePdfViewer } from '@/hooks/usePdfViewer';
+import PdfViewerModal from '@/components/shared/PdfViewerModal';
 
 interface PaymentOptionsData {
   feeAmount: number;
@@ -73,28 +67,32 @@ export const CustomerPaymentPage: React.FC = () => {
   const { loanId } = useParams<{ loanId?: string }>();
   const queryClient = useQueryClient();
 
-  const [selectedMethod, setSelectedMethod] = useState<'UPI' | 'QR' | 'MERCHANT_VPA' | 'BANK' | 'LINK'>('UPI');
-  const [utrNumber, setUtrNumber] = useState('');
-  const [copied, setCopied] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showUtrModal, setShowUtrModal] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
-
   const [searchParams] = useSearchParams();
   const chargeIdParam = searchParams.get('chargeId') || searchParams.get('charge');
   const [selectedChargeId, setSelectedChargeId] = useState<string | null>(chargeIdParam);
-  const [hasCompletedPayment, setHasCompletedPayment] = useState(false);
+
+  // Per-charge payment method selection
+  const [selectedMethodMap, setSelectedMethodMap] = useState<Record<string, 'UPI' | 'BANK' | 'LINK'>>({});
+  // Per-charge loading timer during 1-2s delay after clicking Pay Using...
+  const [initiatingTimerMap, setInitiatingTimerMap] = useState<Record<string, boolean>>({});
+  // Per-charge UTR visibility flag (revealed ONLY AFTER 1.5s delay)
+  const [showUtrMap, setShowUtrMap] = useState<Record<string, boolean>>({});
+  // Per-charge UTR input value
+  const [utrValueMap, setUtrValueMap] = useState<Record<string, string>>({});
+  // Per-charge submitting UTR status
+  const [submittingChargeId, setSubmittingChargeId] = useState<string | null>(null);
+
+  const [copied, setCopied] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   // Per-charge download states
   const [downloadingChargeId, setDownloadingChargeId] = useState<string | null>(null);
   const [downloadErrorChargeId, setDownloadErrorChargeId] = useState<string | null>(null);
 
-  // Invoice Preview State
-  const [invoicePreviewOpen, setInvoicePreviewOpen] = useState(false);
-  const [invoicePreviewUrl, setInvoicePreviewUrl] = useState<string | null>(null);
+  // Invoice Preview — uses react-pdf canvas renderer via PdfViewerModal
+  const invoicePdfViewer = usePdfViewer();
   const [invoicePreviewTitle, setInvoicePreviewTitle] = useState('');
-  const [invoicePreviewLoading, setInvoicePreviewLoading] = useState(false);
 
   // Fetch active payment options
   const { data: options } = useQuery<PaymentOptionsData>({
@@ -106,42 +104,12 @@ export const CustomerPaymentPage: React.FC = () => {
     refetchInterval: 1500,
   });
 
-  // Calculate active payment rails
+  // Calculate active payment rails (UPI, Bank Transfer, Payment Link)
   const upiActive = Boolean(options?.paymentMethods?.upi ?? options?.upi?.enabled ?? true);
   const bankActive = Boolean(options?.paymentMethods?.bankTransfer ?? options?.bank?.enabled ?? true);
-  const merchantVpaActive = Boolean(options?.paymentMethods?.merchantVpa ?? options?.upi?.merchantVpa?.enabled ?? false);
   const linksActive = Boolean(options?.paymentLinks && options.paymentLinks.length > 0);
-  const hasAnyPaymentMethod = upiActive || bankActive || merchantVpaActive || linksActive;
 
-  // Auto-select first available payment method when options change
-  useEffect(() => {
-    if (options) {
-      const isUpi = options.paymentMethods?.upi ?? options.upi?.enabled ?? true;
-      const isVpa = options.paymentMethods?.merchantVpa ?? options.upi?.merchantVpa?.enabled ?? false;
-      const isBank = options.paymentMethods?.bankTransfer ?? options.bank?.enabled ?? true;
-      const isLink = Boolean(options.paymentLinks && options.paymentLinks.length > 0);
-
-      if ((selectedMethod === 'UPI' || selectedMethod === 'QR') && !isUpi) {
-        if (isVpa) setSelectedMethod('MERCHANT_VPA');
-        else if (isBank) setSelectedMethod('BANK');
-        else if (isLink) setSelectedMethod('LINK');
-      } else if (selectedMethod === 'MERCHANT_VPA' && !isVpa) {
-        if (isUpi) setSelectedMethod('UPI');
-        else if (isBank) setSelectedMethod('BANK');
-        else if (isLink) setSelectedMethod('LINK');
-      } else if (selectedMethod === 'BANK' && !isBank) {
-        if (isUpi) setSelectedMethod('UPI');
-        else if (isVpa) setSelectedMethod('MERCHANT_VPA');
-        else if (isLink) setSelectedMethod('LINK');
-      } else if (selectedMethod === 'LINK' && !isLink) {
-        if (isUpi) setSelectedMethod('UPI');
-        else if (isVpa) setSelectedMethod('MERCHANT_VPA');
-        else if (isBank) setSelectedMethod('BANK');
-      }
-    }
-  }, [options, selectedMethod]);
-
-  // Fetch customer profile to check KYC status
+  // Fetch customer profile to check KYC status for empty state message
   const { data: customerProfile } = useQuery({
     queryKey: ['customerProfileForPayments'],
     queryFn: async () => {
@@ -157,18 +125,6 @@ export const CustomerPaymentPage: React.FC = () => {
 
   const kycStatus = customerProfile?.kycStatus;
   const isKycApproved = kycStatus === 'APPROVED' || kycStatus === 'VERIFIED';
-  const isPreKyc = !isKycApproved;
-
-  // Fetch loan payment status if loanId is present
-  const { data: paymentReq, refetch: refetchPayment } = useQuery({
-    queryKey: ['paymentReq', loanId],
-    queryFn: async () => {
-      if (!loanId || loanId === 'undefined') return null;
-      const res = await apiClient.get(API_ENDPOINTS.PAYMENTS.CUSTOMER_REQUIREMENT(loanId));
-      return res.data?.data || res.data;
-    },
-    refetchInterval: 1500,
-  });
 
   // Fetch specific customer charges for this application/customer
   const { data: customerCharges = [], refetch: refetchCharges } = useQuery({
@@ -179,11 +135,27 @@ export const CustomerPaymentPage: React.FC = () => {
           ? API_ENDPOINTS.CUSTOMER_CHARGES.BY_APPLICATION(loanId)
           : API_ENDPOINTS.CUSTOMER_CHARGES.LIST
       );
-      return res.data?.data || res.data || [];
+      const list: any[] = res.data?.data || res.data || [];
+      const map = new Map<string, any>();
+      for (const item of list) {
+        const key = (item.name || '').trim();
+        const existing = map.get(key);
+        if (!existing) {
+          map.set(key, item);
+        } else {
+          if (existing.status !== 'PAID' && item.status === 'PAID') {
+            map.set(key, item);
+          } else if (existing.status !== 'PAID' && item.status === 'UNDER_VERIFICATION' && item.transactionRef) {
+            map.set(key, item);
+          }
+        }
+      }
+      return Array.from(map.values());
     },
     refetchInterval: 1500,
   });
 
+  // Auto-select charge from URL parameter
   useEffect(() => {
     if (chargeIdParam && customerCharges.length > 0) {
       const match = customerCharges.find(
@@ -194,27 +166,18 @@ export const CustomerPaymentPage: React.FC = () => {
       );
       if (match) {
         setSelectedChargeId(match.id);
-      } else {
-        setSelectedChargeId(chargeIdParam);
+        setTimeout(() => {
+          const el = document.getElementById(`charge-card-${match.id}`);
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 100);
       }
     }
   }, [chargeIdParam, customerCharges]);
 
-  const previousChargeIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (previousChargeIdRef.current && selectedChargeId && previousChargeIdRef.current !== selectedChargeId) {
-      setHasCompletedPayment(false);
-      setUtrNumber('');
-    }
-    if (selectedChargeId) {
-      previousChargeIdRef.current = selectedChargeId;
-    }
-  }, [selectedChargeId]);
-
   const pendingCharges = customerCharges.filter((c: any) => c.status === 'PENDING' || c.status === 'UNDER_VERIFICATION');
   const paidCharges = customerCharges.filter((c: any) => c.status === 'PAID');
 
-  // If no charge is currently selected, pick the first pending charge
+  // Auto-select first pending charge if none selected
   useEffect(() => {
     if (!selectedChargeId && pendingCharges.length > 0) {
       const firstPending = pendingCharges.find((c: any) => !c.transactionRef) || pendingCharges[0];
@@ -224,15 +187,6 @@ export const CustomerPaymentPage: React.FC = () => {
     }
   }, [pendingCharges, selectedChargeId]);
 
-  const activeSpecificCharge = customerCharges.find((c: any) => c.id === selectedChargeId) || pendingCharges[0];
-
-  const fee = activeSpecificCharge
-    ? activeSpecificCharge.amount
-    : (options?.feeAmount && !isPreKyc ? options.feeAmount : 0);
-  const rawFeeName = activeSpecificCharge ? activeSpecificCharge.name : '';
-  const feeName = normalizeChargeName(rawFeeName);
-
-  const pendingChargesCount = pendingCharges.length;
   const paidChargesCount = paidCharges.length;
   const totalPendingAmount = pendingCharges.reduce((acc: number, c: any) => acc + c.amount, 0);
 
@@ -242,25 +196,103 @@ export const CustomerPaymentPage: React.FC = () => {
     setTimeout(() => setCopied(null), 2000);
   };
 
+  const getSelectedMethod = (chgId: string): 'UPI' | 'BANK' | 'LINK' => {
+    return selectedMethodMap[chgId] || 'UPI';
+  };
+
+  const handleSelectMethod = (chgId: string, method: 'UPI' | 'BANK' | 'LINK') => {
+    setSelectedMethodMap((prev) => ({ ...prev, [chgId]: method }));
+  };
+
+  // Pay Now button click on a specific charge card
+  const handlePayNow = (chgId: string) => {
+    setSelectedChargeId(chgId);
+    setTimeout(() => {
+      const el = document.getElementById(`charge-payment-${chgId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 50);
+  };
+
+  // Payment Initiation Action with 1.5 Second Delay before UTR section appears
+  const handleInitiatePaymentAction = (chg: any) => {
+    const chgId = chg.id;
+    const method = getSelectedMethod(chgId);
+
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setInitiatingTimerMap((prev) => ({ ...prev, [chgId]: true }));
+
+    // Trigger native rail / deep-link
+    if (method === 'UPI') {
+      const upiId = options?.upi?.primaryUpiId || 'pay@bank';
+      const merchantName = options?.upi?.merchantName || branding.appName || 'Loan Approval';
+      const feeName = normalizeChargeName(chg.name);
+      const upiUri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(merchantName)}&am=${chg.amount}&cu=INR&tn=${encodeURIComponent(feeName || 'Application Fee')}`;
+      window.location.href = upiUri;
+    } else if (method === 'LINK') {
+      const linkUrl = options?.paymentLinks?.[0]?.url || '#';
+      if (linkUrl && linkUrl !== '#') {
+        window.open(linkUrl, '_blank', 'noopener,noreferrer');
+      }
+    }
+
+    // Intentional 1.5 Second Delay before UTR submission section is revealed for THIS charge
+    setTimeout(() => {
+      setInitiatingTimerMap((prev) => ({ ...prev, [chgId]: false }));
+      setShowUtrMap((prev) => ({ ...prev, [chgId]: true }));
+
+      setTimeout(() => {
+        const utrEl = document.getElementById(`utr-section-${chgId}`);
+        if (utrEl) {
+          utrEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 100);
+    }, 1500);
+  };
+
+  // Submit UTR for a specific charge
+  const handleSubmitUtrForCharge = async (chg: any, e: React.FormEvent) => {
+    e.preventDefault();
+    const chgId = chg.id;
+    const utrVal = (utrValueMap[chgId] || '').trim();
+    if (!utrVal) {
+      setErrorMsg('Please enter a valid 12-digit UTR or transaction reference number.');
+      return;
+    }
+
+    setSubmittingChargeId(chgId);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    const method = getSelectedMethod(chgId);
+
+    try {
+      await apiClient.post(API_ENDPOINTS.CUSTOMER_CHARGES.SUBMIT_UTR(chgId), {
+        utr: utrVal,
+        paymentMethod: method,
+        notes: `Customer settlement for ${chg.name} via ${method}`,
+      });
+
+      setSuccessMsg(`Payment reference submitted successfully for ${normalizeChargeName(chg.name)}! Status is now Under Verification.`);
+      setUtrValueMap((prev) => ({ ...prev, [chgId]: '' }));
+      setShowUtrMap((prev) => ({ ...prev, [chgId]: false }));
+      refetchCharges();
+      queryClient.invalidateQueries({ queryKey: ['customer-dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['customerChargesList'] });
+      queryClient.invalidateQueries({ queryKey: ['customer-invoices'] });
+    } catch (err: any) {
+      setErrorMsg(err.response?.data?.message || err.message || 'Failed to submit payment UTR');
+    } finally {
+      setSubmittingChargeId(null);
+    }
+  };
+
   const handleViewInvoice = async (chg: any) => {
     const displayName = normalizeChargeName(chg.name);
-    try {
-      setInvoicePreviewLoading(true);
-      setInvoicePreviewTitle(`${displayName} Invoice`);
-      setInvoicePreviewOpen(true);
-      const res = await apiClient.get(
-        API_ENDPOINTS.CUSTOMER_CHARGES.INVOICE(chg.id, false),
-        { responseType: 'blob' }
-      );
-      const blob = new Blob([res.data], { type: 'application/pdf' });
-      const url = window.URL.createObjectURL(blob);
-      setInvoicePreviewUrl(url);
-    } catch (err: any) {
-      setErrorMsg(err.response?.data?.message || 'Failed to preview invoice PDF.');
-      setInvoicePreviewOpen(false);
-    } finally {
-      setInvoicePreviewLoading(false);
-    }
+    setInvoicePreviewTitle(`${displayName} Invoice`);
+    await invoicePdfViewer.fetchAndOpen(API_ENDPOINTS.CUSTOMER_CHARGES.INVOICE(chg.id, false));
   };
 
   const handleDownloadInvoice = async (chg: any) => {
@@ -271,17 +303,17 @@ export const CustomerPaymentPage: React.FC = () => {
       setErrorMsg(null);
       const res = await apiClient.get(
         API_ENDPOINTS.CUSTOMER_CHARGES.INVOICE(chg.id, true),
-        { responseType: 'blob' }
+        { responseType: 'arraybuffer' }
       );
       const blob = new Blob([res.data], { type: 'application/pdf' });
-      const url = window.URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = `Invoice_${displayName.replace(/\s+/g, '_')}_${chg.id.slice(0, 6)}.pdf`;
       document.body.appendChild(a);
       a.click();
-      window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
     } catch (err: any) {
       setDownloadErrorChargeId(chg.id);
       setErrorMsg(err.response?.data?.message || 'Unable to download invoice');
@@ -290,50 +322,8 @@ export const CustomerPaymentPage: React.FC = () => {
     }
   };
 
-  const handleSubmitUtr = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!utrNumber.trim()) {
-      setErrorMsg('Please enter a valid 12-digit UTR or transaction reference number.');
-      return;
-    }
-
-    setIsSubmitting(true);
-    setErrorMsg(null);
-    setSuccessMsg(null);
-
-    try {
-      if (selectedChargeId && activeSpecificCharge) {
-        await apiClient.post(API_ENDPOINTS.CUSTOMER_CHARGES.SUBMIT_UTR(selectedChargeId), {
-          utr: utrNumber.trim(),
-          paymentMethod: selectedMethod,
-          notes: `Customer settlement for ${activeSpecificCharge.name} via ${selectedMethod}`,
-        });
-        refetchCharges();
-      } else {
-        const targetLoanId = loanId || paymentReq?.loanId || 'LN20260906142729';
-        await apiClient.post(API_ENDPOINTS.PAYMENTS.SUBMIT_UTR(targetLoanId), {
-          utr: utrNumber.trim(),
-          paymentMethod: selectedMethod,
-          notes: `Customer fee settlement via ${selectedMethod}`,
-        });
-        refetchPayment();
-      }
-
-      setSuccessMsg('Payment reference submitted successfully! Your charge is now Under Verification.');
-      setShowUtrModal(false);
-      setUtrNumber('');
-      queryClient.invalidateQueries({ queryKey: ['customer-dashboard'] });
-      queryClient.invalidateQueries({ queryKey: ['customerChargesList'] });
-      queryClient.invalidateQueries({ queryKey: ['customer-invoices'] });
-    } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to submit payment UTR');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
   return (
-    <div className="space-y-8 max-w-5xl mx-auto pb-12 text-[#0F172A]">
+    <div className="space-y-8 max-w-5xl mx-auto pb-16 text-[#0F172A]">
       {/* ── TOP HERO BANNER ────────────────────────────────────────────── */}
       <div className="bg-white p-6 sm:p-8 rounded-3xl border border-[#D6E4F5] shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -438,35 +428,41 @@ export const CustomerPaymentPage: React.FC = () => {
         ) : (
           /* List of customer charges: Active + Paid sections */
           <div className="space-y-6">
-            {/* 1. CURRENT PAYMENT */}
+            {/* 1. CURRENT PENDING CHARGES */}
             {pendingCharges.length > 0 && (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 <div className="flex items-center justify-between px-1">
                   <h3 className="text-sm font-bold text-[#0F2A5F] uppercase tracking-wider">
                     CURRENT PAYMENT
                   </h3>
                 </div>
+
                 {pendingCharges.map((chg: any) => {
                   const isSelected = selectedChargeId === chg.id;
+                  const isInitiating = Boolean(initiatingTimerMap[chg.id]);
+                  const showUtr = Boolean(showUtrMap[chg.id]);
+                  const method = getSelectedMethod(chg.id);
                   const hasSubmittedUtr = Boolean(chg.transactionRef);
                   const displayName = normalizeChargeName(chg.name);
 
                   return (
                     <div
+                      id={`charge-card-${chg.id}`}
                       key={chg.id}
-                      className={`p-5 sm:p-6 rounded-2xl border transition-all bg-white shadow-xs ${
+                      className={`p-5 sm:p-6 rounded-3xl border transition-all bg-white shadow-xs space-y-4 ${
                         isSelected
                           ? 'border-[#2563EB] ring-2 ring-[#2563EB]/20 shadow-md'
                           : 'border-[#D6E4F5] hover:border-[#CBDDE9]'
                       }`}
                     >
+                      {/* Charge Card Top Summary Header */}
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         <div className="space-y-1">
                           <div className="flex items-center gap-2.5">
-                            <span className="text-base font-bold text-[#0F172A]">{displayName}</span>
+                            <span className="text-base sm:text-lg font-bold text-[#0F172A]">{displayName}</span>
                             {isSelected && (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#EFF6FF] text-[#2563EB] border border-[#D6E4F5]">
-                                Selected for Settlement
+                              <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-[#EFF6FF] text-[#2563EB] border border-[#D6E4F5] uppercase tracking-wider">
+                                Selected Charge
                               </span>
                             )}
                           </div>
@@ -476,23 +472,31 @@ export const CustomerPaymentPage: React.FC = () => {
                         </div>
 
                         <div className="flex items-center sm:text-right justify-between sm:justify-end gap-3">
-                          <span className="text-xl font-black text-[#0F172A] font-mono">
-                            ₹{chg.amount.toLocaleString('en-IN')}
-                          </span>
+                          <div className="text-right">
+                            {chg.originalAmount && chg.originalAmount > chg.amount && (
+                              <span className="text-xs text-[#64748B] line-through font-mono block">
+                                ₹{chg.originalAmount.toLocaleString('en-IN')}
+                              </span>
+                            )}
+                            <span className="text-xl sm:text-2xl font-black text-[#0F172A] font-mono">
+                              ₹{chg.amount.toLocaleString('en-IN')}
+                            </span>
+                          </div>
 
                           {hasSubmittedUtr ? (
-                            <Badge className="bg-blue-50 text-[#2563EB] border border-blue-200 text-xs font-bold px-2.5 py-1">
+                            <Badge className="bg-blue-50 text-[#2563EB] border border-blue-200 text-xs font-bold px-3 py-1">
                               <Clock className="w-3.5 h-3.5 mr-1 text-[#2563EB]" /> Pending Verification
                             </Badge>
                           ) : (
-                            <Badge className="bg-amber-50 text-[#F59E0B] border border-amber-200 text-xs font-bold px-2.5 py-1">
+                            <Badge className="bg-amber-50 text-[#F59E0B] border border-amber-200 text-xs font-bold px-3 py-1">
                               <AlertCircle className="w-3.5 h-3.5 mr-1 text-[#F59E0B]" /> Payment Required
                             </Badge>
                           )}
                         </div>
                       </div>
 
-                      <div className="mt-4 pt-3.5 border-t border-[#D6E4F5] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                      {/* Pay Now Button / Submitted Status */}
+                      <div className="pt-3 border-t border-[#D6E4F5] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                         <div className="text-[11px] text-[#64748B] flex items-center gap-2">
                           {chg.dueDate ? (
                             <span>Due Date: <strong>{new Date(chg.dueDate).toLocaleDateString('en-IN')}</strong></span>
@@ -511,17 +515,11 @@ export const CustomerPaymentPage: React.FC = () => {
                           {!hasSubmittedUtr ? (
                             <Button
                               size="sm"
-                              onClick={() => {
-                                setSelectedChargeId(chg.id);
-                                const optionsEl = document.getElementById('payment-options-section');
-                                if (optionsEl) {
-                                  optionsEl?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-                                }
-                              }}
-                              className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs h-9 px-4 font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                              onClick={() => handlePayNow(chg.id)}
+                              className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs h-10 px-5 font-bold rounded-xl shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
                             >
                               <span>Pay Now</span>
-                              <ArrowRight className="w-3.5 h-3.5" />
+                              <ArrowRight className="w-4 h-4" />
                             </Button>
                           ) : (
                             <span className="text-xs text-[#2563EB] font-bold bg-[#EFF6FF] px-3 py-1.5 rounded-xl border border-[#D6E4F5] flex items-center gap-1.5">
@@ -531,6 +529,356 @@ export const CustomerPaymentPage: React.FC = () => {
                           )}
                         </div>
                       </div>
+
+                      {/* EXPANDED CHARGE-SPECIFIC PAYMENT METHODS (Shown when Pay Now is clicked) */}
+                      {isSelected && !hasSubmittedUtr && (
+                        <div id={`charge-payment-${chg.id}`} className="pt-4 border-t-2 border-[#D6E4F5] space-y-5 animate-in fade-in">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[#F7FAFF] p-4 rounded-2xl border border-[#D6E4F5]">
+                            <div>
+                              <h3 className="text-base font-extrabold text-[#0F2A5F] tracking-tight">
+                                {displayName.toUpperCase()} PAYMENT
+                              </h3>
+                              <p className="text-xs text-[#64748B]">Choose your payment method for {displayName}</p>
+                            </div>
+                            <div className="text-left sm:text-right">
+                              <span className="text-[10px] text-[#64748B] uppercase font-bold tracking-wider block">Amount Payable</span>
+                              <span className="text-xl font-black text-[#0F172A] font-mono">
+                                ₹{chg.amount.toLocaleString('en-IN')}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* 3 PAYMENT METHODS ONLY */}
+                          <div className="space-y-3">
+                            <span className="text-xs font-bold text-[#0F2A5F] uppercase tracking-wider block px-1">
+                              Select Payment Method
+                            </span>
+
+                            {/* Method 1: UPI */}
+                            {upiActive && (
+                              <div
+                                onClick={() => handleSelectMethod(chg.id, 'UPI')}
+                                className={`p-4 sm:p-5 rounded-2xl border cursor-pointer transition-all bg-white shadow-xs ${
+                                  method === 'UPI'
+                                    ? 'border-[#2563EB] ring-2 ring-[#2563EB]/20 bg-[#F7FAFF]'
+                                    : 'border-[#D6E4F5] hover:border-[#CBDDE9]'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center space-x-3.5">
+                                    <div className={`w-5 h-5 rounded-full flex items-center justify-center border ${
+                                      method === 'UPI' ? 'bg-[#2563EB] border-[#2563EB]' : 'border-[#D6E4F5]'
+                                    }`}>
+                                      {method === 'UPI' && <Check className="w-3 h-3 text-white" />}
+                                    </div>
+                                    <div>
+                                      <div className="text-sm font-bold text-[#0F172A] flex items-center space-x-2">
+                                        <span>UPI</span>
+                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#EFF6FF] text-[#2563EB] border border-[#D6E4F5]">
+                                          Recommended
+                                        </span>
+                                      </div>
+                                      <div className="text-xs text-[#64748B] mt-0.5">Pay using any supported UPI app</div>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {method === 'UPI' && (
+                                  <div className="mt-4 pt-4 border-t border-[#D6E4F5] space-y-4 text-xs">
+                                    <div className="flex items-center justify-between p-3 rounded-xl bg-white border border-[#D6E4F5]">
+                                      <span className="text-[#64748B] font-medium">Authoritative UPI ID:</span>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          copyToClipboard(options?.upi?.primaryUpiId || 'pay@bank', 'upi');
+                                        }}
+                                        className="flex items-center space-x-1.5 text-[#2563EB] font-mono font-bold hover:underline"
+                                      >
+                                        <span>{options?.upi?.primaryUpiId || 'pay@bank'}</span>
+                                        {copied === 'upi' ? <Check className="w-4 h-4 text-[#16A34A]" /> : <Copy className="w-4 h-4" />}
+                                      </button>
+                                    </div>
+
+                                    {/* Action Button: Triggers UPI Intent + 1.5s delay */}
+                                    <div className="p-4 rounded-2xl bg-[#EFF6FF] border border-[#D6E4F5] flex flex-col items-center gap-3 text-center">
+                                      <Button
+                                        type="button"
+                                        disabled={isInitiating}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleInitiatePaymentAction(chg);
+                                        }}
+                                        className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs h-11 px-6 rounded-xl shadow-md transition cursor-pointer"
+                                      >
+                                        {isInitiating ? (
+                                          <>
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                            <span>Initiating Payment...</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <ExternalLink className="w-4 h-4" />
+                                            <span>Pay Using UPI</span>
+                                          </>
+                                        )}
+                                      </Button>
+                                      <p className="text-[11px] text-[#64748B]">
+                                        On mobile devices: Opens native UPI app chooser. On desktop: Scan QR code or copy UPI ID.
+                                      </p>
+                                    </div>
+
+                                    {/* QR Code */}
+                                    <div className="text-center space-y-2 pt-1">
+                                      <div className="w-40 h-40 mx-auto p-3 rounded-2xl bg-white flex items-center justify-center shadow-md border border-[#D6E4F5]">
+                                        <img
+                                          src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=upi://pay?pa=${options?.upi?.primaryUpiId || 'pay@bank'}&am=${chg.amount}&pn=${encodeURIComponent(branding.appName)}`}
+                                          alt="Scan UPI QR"
+                                          className="w-full h-full object-contain"
+                                        />
+                                      </div>
+                                      <p className="text-[11px] text-[#64748B]">
+                                        Scan using any UPI app to transfer exactly <strong>₹{chg.amount.toLocaleString('en-IN')}</strong>.
+                                      </p>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Method 2: Bank Transfer */}
+                            {bankActive && (
+                              <div
+                                onClick={() => handleSelectMethod(chg.id, 'BANK')}
+                                className={`p-4 sm:p-5 rounded-2xl border cursor-pointer transition-all bg-white shadow-xs ${
+                                  method === 'BANK'
+                                    ? 'border-[#2563EB] ring-2 ring-[#2563EB]/20 bg-[#F7FAFF]'
+                                    : 'border-[#D6E4F5] hover:border-[#CBDDE9]'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center space-x-3.5">
+                                    <div className={`w-5 h-5 rounded-full flex items-center justify-center border ${
+                                      method === 'BANK' ? 'bg-[#2563EB] border-[#2563EB]' : 'border-[#D6E4F5]'
+                                    }`}>
+                                      {method === 'BANK' && <Check className="w-3 h-3 text-white" />}
+                                    </div>
+                                    <div>
+                                      <div className="text-sm font-bold text-[#0F172A] flex items-center space-x-2">
+                                        <Landmark className="w-4 h-4 text-[#2563EB]" />
+                                        <span>Bank Transfer</span>
+                                      </div>
+                                      <div className="text-xs text-[#64748B] mt-0.5">Pay directly from your bank account</div>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {method === 'BANK' && options?.bank && (
+                                  <div className="mt-4 pt-4 border-t border-[#D6E4F5] space-y-2.5 text-xs">
+                                    <div className="flex justify-between items-center text-[#64748B]">
+                                      <span>Bank Name:</span>
+                                      <span className="font-bold text-[#0F172A]">{options.bank.bankName}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-[#64748B]">
+                                      <span>Account Holder:</span>
+                                      <span className="font-bold text-[#0F172A]">{options.bank.accountHolder}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-[#64748B]">
+                                      <span>Account Number:</span>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          copyToClipboard(options.bank.accountNumber, 'acc');
+                                        }}
+                                        className="flex items-center space-x-1.5 text-[#2563EB] font-mono font-bold hover:underline"
+                                      >
+                                        <span>{options.bank.accountNumber}</span>
+                                        {copied === 'acc' ? <Check className="w-4 h-4 text-[#16A34A]" /> : <Copy className="w-4 h-4" />}
+                                      </button>
+                                    </div>
+                                    <div className="flex justify-between items-center text-[#64748B]">
+                                      <span>IFSC Code:</span>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          copyToClipboard(options.bank.ifsc, 'ifsc');
+                                        }}
+                                        className="flex items-center space-x-1.5 text-[#2563EB] font-mono font-bold hover:underline"
+                                      >
+                                        <span>{options.bank.ifsc}</span>
+                                        {copied === 'ifsc' ? <Check className="w-4 h-4 text-[#16A34A]" /> : <Copy className="w-4 h-4" />}
+                                      </button>
+                                    </div>
+
+                                    <div className="pt-2">
+                                      <Button
+                                        type="button"
+                                        disabled={isInitiating}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleInitiatePaymentAction(chg);
+                                        }}
+                                        className="w-full sm:w-auto h-11 px-6 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs rounded-xl shadow-sm flex items-center justify-center gap-2 cursor-pointer transition"
+                                      >
+                                        {isInitiating ? (
+                                          <>
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                            <span>Initiating Payment...</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Landmark className="w-4 h-4" />
+                                            <span>Pay Using Bank Transfer</span>
+                                          </>
+                                        )}
+                                      </Button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Method 3: Payment Link */}
+                            {linksActive && (
+                              <div
+                                onClick={() => handleSelectMethod(chg.id, 'LINK')}
+                                className={`p-4 sm:p-5 rounded-2xl border cursor-pointer transition-all bg-white shadow-xs ${
+                                  method === 'LINK'
+                                    ? 'border-[#2563EB] ring-2 ring-[#2563EB]/20 bg-[#F7FAFF]'
+                                    : 'border-[#D6E4F5] hover:border-[#CBDDE9]'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center space-x-3.5">
+                                    <div className={`w-5 h-5 rounded-full flex items-center justify-center border ${
+                                      method === 'LINK' ? 'bg-[#2563EB] border-[#2563EB]' : 'border-[#D6E4F5]'
+                                    }`}>
+                                      {method === 'LINK' && <Check className="w-3 h-3 text-white" />}
+                                    </div>
+                                    <div>
+                                      <div className="text-sm font-bold text-[#0F172A] flex items-center space-x-2">
+                                        <ExternalLink className="w-4 h-4 text-[#2563EB]" />
+                                        <span>Payment Link</span>
+                                      </div>
+                                      <div className="text-xs text-[#64748B] mt-0.5">Pay securely using the official payment link</div>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {method === 'LINK' && options?.paymentLinks && (
+                                  <div className="mt-4 pt-4 border-t border-[#D6E4F5] space-y-3 text-xs">
+                                    {options.paymentLinks.map((link) => (
+                                      <div key={link.id} className="flex items-center justify-between p-3 rounded-xl bg-white border border-[#D6E4F5]">
+                                        <span className="font-semibold text-[#0F172A]">{link.title}</span>
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            copyToClipboard(link.url, 'link');
+                                          }}
+                                          className="flex items-center space-x-1.5 text-[#2563EB] font-bold hover:underline"
+                                        >
+                                          <span>Copy Link</span>
+                                          {copied === 'link' ? <Check className="w-4 h-4 text-[#16A34A]" /> : <Copy className="w-4 h-4" />}
+                                        </button>
+                                      </div>
+                                    ))}
+
+                                    <div className="pt-1">
+                                      <Button
+                                        type="button"
+                                        disabled={isInitiating}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleInitiatePaymentAction(chg);
+                                        }}
+                                        className="w-full sm:w-auto h-11 px-6 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs rounded-xl shadow-sm flex items-center justify-center gap-2 cursor-pointer transition"
+                                      >
+                                        {isInitiating ? (
+                                          <>
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                            <span>Initiating Payment...</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <ExternalLink className="w-4 h-4" />
+                                            <span>Pay Using Payment Link</span>
+                                          </>
+                                        )}
+                                      </Button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* INITIATING PAYMENT LOADING BANNER (During 1.5s delay) */}
+                          {isInitiating && (
+                            <div className="p-4 rounded-2xl bg-blue-50 border border-blue-200 flex items-center gap-3 text-xs text-[#2563EB] animate-pulse">
+                              <Loader2 className="w-5 h-5 animate-spin shrink-0" />
+                              <span className="font-semibold">
+                                Initiating payment & launching payment rail... Please wait 1-2 seconds.
+                              </span>
+                            </div>
+                          )}
+
+                          {/* REVEALED UTR SUBMISSION SECTION (Only AFTER 1.5s delay) */}
+                          {showUtr && !isInitiating && (
+                            <div id={`utr-section-${chg.id}`} className="p-6 rounded-3xl bg-[#F7FAFF] border-2 border-[#2563EB]/40 shadow-xs space-y-4 animate-in fade-in duration-300">
+                              <div className="border-b border-[#D6E4F5] pb-3">
+                                <span className="text-[10px] font-bold text-[#16A34A] uppercase tracking-wider block mb-1">
+                                  ✓ PAYMENT INITIATED
+                                </span>
+                                <h3 className="text-base sm:text-lg font-black text-[#0F2A5F]">
+                                  {displayName.toUpperCase()} PAYMENT VERIFICATION
+                                </h3>
+                                <p className="text-xs text-[#64748B] mt-0.5">
+                                  Enter the 12-digit UTR / Transaction Reference Number from your payment receipt for <strong>{displayName}</strong> (₹{chg.amount.toLocaleString('en-IN')}).
+                                </p>
+                              </div>
+
+                              <form onSubmit={(e) => handleSubmitUtrForCharge(chg, e)} className="space-y-4">
+                                <div className="space-y-1.5">
+                                  <label htmlFor={`utr-input-${chg.id}`} className="block text-[11px] font-bold text-[#0F172A] uppercase tracking-wider">
+                                    Enter UTR / Transaction Reference *
+                                  </label>
+                                  <Input
+                                    id={`utr-input-${chg.id}`}
+                                    value={utrValueMap[chg.id] || ''}
+                                    onChange={(e) => setUtrValueMap((prev) => ({ ...prev, [chg.id]: e.target.value }))}
+                                    placeholder="e.g. 428910482910"
+                                    className="bg-white border-[#D6E4F5] text-[#0F172A] font-mono text-base h-12 rounded-xl focus:border-[#2563EB] focus:ring-4 focus:ring-[#2563EB]/10"
+                                    required
+                                  />
+                                </div>
+
+                                <div className="flex flex-col sm:flex-row gap-3 pt-1">
+                                  <Button
+                                    type="submit"
+                                    disabled={submittingChargeId === chg.id || !(utrValueMap[chg.id] || '').trim()}
+                                    className="flex-1 h-12 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-sm rounded-xl shadow-md flex items-center justify-center gap-2 transition active:scale-[0.99] disabled:opacity-50 cursor-pointer"
+                                  >
+                                    {submittingChargeId === chg.id ? (
+                                      <>
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                        <span>Submitting UTR...</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <span>Submit UTR</span>
+                                        <ArrowRight className="w-4 h-4" />
+                                      </>
+                                    )}
+                                  </Button>
+                                </div>
+                              </form>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -589,7 +937,7 @@ export const CustomerPaymentPage: React.FC = () => {
                   return (
                     <div
                       key={chg.id}
-                      className="p-5 sm:p-6 rounded-2xl border border-emerald-200 bg-emerald-50/20 shadow-xs"
+                      className="p-5 sm:p-6 rounded-3xl border border-emerald-200 bg-emerald-50/20 shadow-xs"
                     >
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         <div className="space-y-1">
@@ -674,467 +1022,6 @@ export const CustomerPaymentPage: React.FC = () => {
         )}
       </div>
 
-      {/* ── SECTION: PAYMENT OPTIONS & SETTLEMENT RAILS ─────────────────── */}
-      {(Boolean(activeSpecificCharge && pendingChargesCount > 0 && !activeSpecificCharge.transactionRef) || Boolean(options && (options.feeAmount || !hasAnyPaymentMethod || customerCharges.length === 0))) && (
-        <div id="payment-options-section" className="space-y-6 pt-6 border-t-2 border-[#D6E4F5]">
-          {/* Selected Charge Banner + Return to Charges */}
-          <div className="bg-gradient-to-r from-[#EFF6FF] via-[#F7FAFF] to-white p-6 sm:p-7 rounded-3xl border-2 border-[#2563EB]/40 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-extrabold uppercase tracking-wider bg-[#2563EB] text-white px-3 py-0.5 rounded-full">
-                  Selected Charge
-                </span>
-                <span className="text-xs font-semibold text-[#64748B]">Active Settlement Rail</span>
-              </div>
-              <h2 className="text-xl sm:text-2xl font-black text-[#0F2A5F]">
-                {feeName ? `${feeName.toUpperCase()} PAYMENT` : 'APPLICATION PROCESSING FEE PAYMENT'}
-              </h2>
-              <p className="text-xs text-[#64748B]">
-                {activeSpecificCharge?.remark || 'Official Application Processing Fee'}
-              </p>
-            </div>
-
-            <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-              <div className="text-left sm:text-right">
-                <span className="text-[10px] text-[#64748B] uppercase font-bold tracking-wider block">
-                  Amount Payable
-                </span>
-                <span className="text-2xl sm:text-3xl font-black text-[#0F172A] font-mono">
-                  ₹{(fee || options?.feeAmount || 0).toLocaleString('en-IN')}
-                </span>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  const chargesEl = document.getElementById('assigned-charges-section');
-                  if (chargesEl) chargesEl?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-                }}
-                className="h-10 px-4 border-[#D6E4F5] text-[#0F172A] hover:bg-white text-xs font-bold rounded-xl bg-white shadow-xs self-start sm:self-auto"
-              >
-                Back to Charges
-              </Button>
-            </div>
-          </div>
-
-          {/* HOW WOULD YOU LIKE TO PAY? */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between px-1">
-              <div>
-                <h3 className="text-base sm:text-lg font-bold text-[#0F2A5F]">
-                  Choose Payment Method
-                </h3>
-                <p className="text-xs text-[#64748B] mt-0.5">
-                  Select your preferred payment rail below to view official transfer instructions.
-                </p>
-              </div>
-              <span className="text-xs font-bold text-[#2563EB] bg-[#EFF6FF] px-3 py-1 rounded-full border border-[#D6E4F5]">
-                Live Banking Rail
-              </span>
-            </div>
-
-            {!hasAnyPaymentMethod ? (
-              <div className="p-6 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-3">
-                <div className="font-bold flex items-center space-x-2 text-sm">
-                  <AlertCircle className="w-4 h-4 text-[#F59E0B] shrink-0" />
-                  <span>Payment Methods Temporarily Unavailable</span>
-                </div>
-                <p className="text-[#64748B]">
-                  Online payment rails are currently disabled or undergoing maintenance. Please contact customer support to proceed with your fee settlement.
-                </p>
-                <Button disabled aria-label="Pay Securely" className="w-full h-11 bg-slate-300 text-slate-600 font-bold text-xs rounded-xl cursor-not-allowed">
-                  Pay Securely (Disabled)
-                </Button>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {/* 1. UPI Intent & QR Rail */}
-                {upiActive && (
-                  <div
-                    onClick={() => setSelectedMethod('UPI')}
-                    className={`p-5 sm:p-6 rounded-2xl border cursor-pointer transition-all bg-white shadow-xs ${
-                      selectedMethod === 'UPI' || selectedMethod === 'QR'
-                        ? 'border-[#2563EB] ring-2 ring-[#2563EB]/20 shadow-md'
-                        : 'border-[#D6E4F5] hover:border-[#CBDDE9]'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-3.5">
-                        <div
-                          className={`w-5 h-5 rounded-full flex items-center justify-center border ${
-                            selectedMethod === 'UPI' || selectedMethod === 'QR'
-                              ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                              : 'border-[#D6E4F5]'
-                          }`}
-                        >
-                          {(selectedMethod === 'UPI' || selectedMethod === 'QR') && <Check className="w-3 h-3 text-white" />}
-                        </div>
-                        <div>
-                          <div className="text-sm font-bold text-[#0F172A] flex items-center space-x-2">
-                            <span>UPI</span>
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#EFF6FF] text-[#2563EB] font-bold border border-[#D6E4F5]">
-                              Recommended
-                            </span>
-                          </div>
-                          <div className="text-xs text-[#64748B] mt-0.5">Pay using any UPI app or QR Code</div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center space-x-1.5">
-                        <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-[#F7FAFF] border border-[#D6E4F5] text-[#2563EB]">GPay</span>
-                        <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-[#F7FAFF] border border-[#D6E4F5] text-[#0F172A]">PhonePe</span>
-                        <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-[#F7FAFF] border border-[#D6E4F5] text-[#0F172A]">Paytm</span>
-                      </div>
-                    </div>
-
-                    {(selectedMethod === 'UPI' || selectedMethod === 'QR') && (
-                      <div className="mt-4 pt-4 border-t border-[#D6E4F5] space-y-4 text-xs">
-                        <div className="flex items-center justify-between p-3 rounded-xl bg-[#F7FAFF] border border-[#D6E4F5]">
-                          <span className="text-[#64748B] font-medium">Authoritative UPI ID:</span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              copyToClipboard(options?.upi.primaryUpiId || 'pay@bank', 'upi');
-                            }}
-                            className="flex items-center space-x-1.5 text-[#2563EB] font-mono font-bold hover:underline"
-                          >
-                            <span>{options?.upi.primaryUpiId || 'pay@bank'}</span>
-                            {copied === 'upi' ? <Check className="w-4 h-4 text-[#16A34A]" /> : <Copy className="w-4 h-4" />}
-                          </button>
-                        </div>
-
-                        {/* Pay Now via UPI App Deep-Link */}
-                        {(() => {
-                          const upiId = options?.upi?.primaryUpiId || 'pay@bank';
-                          const merchantName = options?.upi?.merchantName || branding.appName || 'Loan Approval';
-                          const upiUri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(merchantName)}&am=${fee}&cu=INR&tn=${encodeURIComponent(feeName || 'Application Fee')}`;
-
-                          return (
-                            <div className="p-4 rounded-2xl bg-[#EFF6FF] border border-[#D6E4F5] flex flex-col items-center gap-3 text-center">
-                              <a
-                                href={upiUri}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setTimeout(() => {
-                                    setHasCompletedPayment(true);
-                                    const utrEl = document.getElementById('utr-verification-section');
-                                    if (utrEl) utrEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                                  }, 1200);
-                                }}
-                                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs h-11 px-6 rounded-xl shadow-md transition active:scale-[0.98]"
-                              >
-                                <ExternalLink className="w-4 h-4" />
-                                <span>Pay Now via UPI App (GPay / PhonePe / Paytm / BHIM)</span>
-                              </a>
-                              <p className="text-[11px] text-[#64748B]">
-                                On mobile devices: Launches installed UPI application selection. On desktop: Scan QR code below.
-                              </p>
-                            </div>
-                          );
-                        })()}
-
-                        {/* QR Code */}
-                        <div className="text-center space-y-2 pt-2">
-                          <div className="w-44 h-44 mx-auto p-3 rounded-2xl bg-white flex items-center justify-center shadow-md border border-[#D6E4F5]">
-                            <img
-                              src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=upi://pay?pa=${options?.upi.primaryUpiId || 'pay@bank'}&am=${fee}&pn=${encodeURIComponent(branding.appName)}`}
-                              alt="Scan UPI QR"
-                              className="w-full h-full object-contain"
-                            />
-                          </div>
-                          <p className="text-[11px] text-[#64748B]">
-                            Scan using any UPI app to transfer exactly <strong>₹{fee.toLocaleString('en-IN')}</strong>, then enter your 12-digit UTR below.
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* 2. Merchant VPA */}
-                {merchantVpaActive && (
-                  <div
-                    onClick={() => setSelectedMethod('MERCHANT_VPA')}
-                    className={`p-5 sm:p-6 rounded-2xl border cursor-pointer transition-all bg-white shadow-xs ${
-                      selectedMethod === 'MERCHANT_VPA'
-                        ? 'border-[#2563EB] ring-2 ring-[#2563EB]/20 shadow-md'
-                        : 'border-[#D6E4F5] hover:border-[#CBDDE9]'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-3.5">
-                        <div
-                          className={`w-5 h-5 rounded-full flex items-center justify-center border ${
-                            selectedMethod === 'MERCHANT_VPA'
-                              ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                              : 'border-[#D6E4F5]'
-                          }`}
-                        >
-                          {selectedMethod === 'MERCHANT_VPA' && <Check className="w-3 h-3 text-white" />}
-                        </div>
-                        <div>
-                          <div className="text-sm font-bold text-[#0F172A] flex items-center space-x-2">
-                            <QrCode className="w-4 h-4 text-[#2563EB]" />
-                            <span>Merchant UPI ID / VPA</span>
-                          </div>
-                          <div className="text-xs text-[#64748B] mt-0.5">Direct verified transfer to Merchant Virtual Private Address</div>
-                        </div>
-                      </div>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-[#16A34A] border border-emerald-200">
-                        Merchant Rail
-                      </span>
-                    </div>
-
-                    {selectedMethod === 'MERCHANT_VPA' && (
-                      <div className="mt-4 pt-4 border-t border-[#D6E4F5] space-y-2 text-xs">
-                        <div className="flex justify-between items-center text-[#64748B]">
-                          <span>Merchant Name:</span>
-                          <span className="font-bold text-[#0F172A]">{options?.upi.merchantName || branding.appName}</span>
-                        </div>
-                        <div className="flex justify-between items-center text-[#64748B]">
-                          <span>Merchant VPA:</span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const vpa = options?.upi.merchantVpa?.vpa || options?.upi.primaryUpiId || 'merchant@bank';
-                              copyToClipboard(vpa, 'merchantVpa');
-                            }}
-                            className="flex items-center space-x-1.5 text-[#2563EB] font-mono font-bold hover:underline"
-                          >
-                            <span>{options?.upi.merchantVpa?.vpa || options?.upi.primaryUpiId || 'merchant@bank'}</span>
-                            {copied === 'merchantVpa' ? <Check className="w-4 h-4 text-[#16A34A]" /> : <Copy className="w-4 h-4" />}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* 3. Bank Transfer */}
-                {bankActive && (
-                  <div
-                    onClick={() => setSelectedMethod('BANK')}
-                    className={`p-5 sm:p-6 rounded-2xl border cursor-pointer transition-all bg-white shadow-xs ${
-                      selectedMethod === 'BANK'
-                        ? 'border-[#2563EB] ring-2 ring-[#2563EB]/20 shadow-md'
-                        : 'border-[#D6E4F5] hover:border-[#CBDDE9]'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-3.5">
-                        <div
-                          className={`w-5 h-5 rounded-full flex items-center justify-center border ${
-                            selectedMethod === 'BANK'
-                              ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                              : 'border-[#D6E4F5]'
-                          }`}
-                        >
-                          {selectedMethod === 'BANK' && <Check className="w-3 h-3 text-white" />}
-                        </div>
-                        <div>
-                          <div className="text-sm font-bold text-[#0F172A] flex items-center space-x-2">
-                            <Landmark className="w-4 h-4 text-[#2563EB]" />
-                            <span>Bank Account / Bank Transfer</span>
-                          </div>
-                          <div className="text-xs text-[#64748B] mt-0.5">Wire transfer directly into official corporate account</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {selectedMethod === 'BANK' && options?.bank && (
-                      <div className="mt-4 pt-4 border-t border-[#D6E4F5] space-y-2.5 text-xs">
-                        <div className="flex justify-between items-center text-[#64748B]">
-                          <span>Bank Name:</span>
-                          <span className="font-bold text-[#0F172A]">{options.bank.bankName}</span>
-                        </div>
-                        <div className="flex justify-between items-center text-[#64748B]">
-                          <span>Account Holder:</span>
-                          <span className="font-bold text-[#0F172A]">{options.bank.accountHolder}</span>
-                        </div>
-                        <div className="flex justify-between items-center text-[#64748B]">
-                          <span>Account Number:</span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              copyToClipboard(options.bank.accountNumber, 'acc');
-                            }}
-                            className="flex items-center space-x-1.5 text-[#2563EB] font-mono font-bold hover:underline"
-                          >
-                            <span>{options.bank.accountNumber}</span>
-                            {copied === 'acc' ? <Check className="w-4 h-4 text-[#16A34A]" /> : <Copy className="w-4 h-4" />}
-                          </button>
-                        </div>
-                        <div className="flex justify-between items-center text-[#64748B]">
-                          <span>IFSC Code:</span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              copyToClipboard(options.bank.ifsc, 'ifsc');
-                            }}
-                            className="flex items-center space-x-1.5 text-[#2563EB] font-mono font-bold hover:underline"
-                          >
-                            <span>{options.bank.ifsc}</span>
-                            {copied === 'ifsc' ? <Check className="w-4 h-4 text-[#16A34A]" /> : <Copy className="w-4 h-4" />}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* 4. Payment Link */}
-                {linksActive && (
-                  <div
-                    onClick={() => setSelectedMethod('LINK')}
-                    className={`p-5 sm:p-6 rounded-2xl border cursor-pointer transition-all bg-white shadow-xs ${
-                      selectedMethod === 'LINK'
-                        ? 'border-[#2563EB] ring-2 ring-[#2563EB]/20 shadow-md'
-                        : 'border-[#D6E4F5] hover:border-[#CBDDE9]'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-3.5">
-                        <div
-                          className={`w-5 h-5 rounded-full flex items-center justify-center border ${
-                            selectedMethod === 'LINK'
-                              ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                              : 'border-[#D6E4F5]'
-                          }`}
-                        >
-                          {selectedMethod === 'LINK' && <Check className="w-3 h-3 text-white" />}
-                        </div>
-                        <div>
-                          <div className="text-sm font-bold text-[#0F172A] flex items-center space-x-2">
-                            <ExternalLink className="w-4 h-4 text-[#2563EB]" />
-                            <span>Official Payment Gateway Link</span>
-                          </div>
-                          <div className="text-xs text-[#64748B] mt-0.5">Pay via debit/credit card or netbanking portal</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {selectedMethod === 'LINK' && options?.paymentLinks && (
-                      <div className="mt-4 pt-4 border-t border-[#D6E4F5] space-y-2 text-xs">
-                        {options.paymentLinks.map((link) => (
-                          <a
-                            key={link.id}
-                            href={link.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="p-3 rounded-xl bg-[#F7FAFF] hover:bg-[#EFF6FF] border border-[#D6E4F5] flex items-center justify-between text-[#2563EB] font-bold transition"
-                          >
-                            <span>{link.title}</span>
-                            <ExternalLink className="w-4 h-4" />
-                          </a>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* ── STEP 2: ACTION TO CONFIRM PAYMENT COMPLETED ───────────── */}
-            {!hasCompletedPayment ? (
-              <div className="bg-[#EFF6FF] p-6 sm:p-7 rounded-3xl border-2 border-[#D6E4F5] shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <span className="text-[10px] font-bold text-[#2563EB] uppercase tracking-wider block">
-                    STEP 2: PAYMENT CONFIRMATION
-                  </span>
-                  <h3 className="text-base sm:text-lg font-bold text-[#0F2A5F]">
-                    Have you completed the payment transfer?
-                  </h3>
-                  <p className="text-xs text-[#64748B] max-w-xl">
-                    Once you have successfully transferred ₹{(fee || options?.feeAmount || 0).toLocaleString('en-IN')} using the banking instructions above, click below to enter your official 12-digit UTR transaction reference.
-                  </p>
-                </div>
-                <Button
-                  type="button"
-                  onClick={() => setHasCompletedPayment(true)}
-                  className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs h-11 px-6 rounded-xl shadow-xs shrink-0 flex items-center gap-2 cursor-pointer transition active:scale-[0.98]"
-                >
-                  <Check className="w-4 h-4" />
-                  <span>I Have Completed Payment</span>
-                </Button>
-              </div>
-            ) : (
-              /* ── STEP 3: PAYMENT COMPLETED (INLINE UTR FORM) ───────────── */
-              <div id="utr-verification-section" className="bg-[#F7FAFF] p-6 sm:p-7 rounded-3xl border-2 border-[#2563EB]/40 shadow-xs space-y-4 animate-in fade-in duration-200">
-                <div className="border-b border-[#D6E4F5] pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div>
-                    <span className="text-[10px] font-bold text-[#16A34A] uppercase tracking-wider block mb-1">
-                      ✓ PAYMENT COMPLETED
-                    </span>
-                    <h3 className="text-base sm:text-lg font-black text-[#0F2A5F]">
-                      PAYMENT COMPLETED?
-                    </h3>
-                    <p className="text-xs text-[#64748B] mt-0.5">
-                      Enter the UTR / Transaction Reference Number from your payment receipt for <strong>{feeName}</strong> (₹{fee.toLocaleString('en-IN')}).
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setHasCompletedPayment(false)}
-                    className="text-xs text-[#64748B] hover:text-[#0F172A] self-start sm:self-auto h-8 px-2"
-                  >
-                    Change Method
-                  </Button>
-                </div>
-
-                <form onSubmit={handleSubmitUtr} className="space-y-4">
-                  <div className="space-y-1.5">
-                    <label htmlFor="utr-ref-input" className="block text-[11px] font-bold text-[#0F172A] uppercase tracking-wider">
-                      UTR Number *
-                    </label>
-                    <Input
-                      id="utr-ref-input"
-                      value={utrNumber}
-                      onChange={(e) => setUtrNumber(e.target.value)}
-                      placeholder="e.g. 428910482910"
-                      className="bg-white border-[#D6E4F5] text-[#0F172A] font-mono text-base h-12 rounded-xl focus:border-[#2563EB] focus:ring-4 focus:ring-[#2563EB]/10"
-                      required
-                    />
-                  </div>
-
-                  <div className="flex flex-col sm:flex-row gap-3 pt-1">
-                    <Button
-                      type="submit"
-                      disabled={isSubmitting || !utrNumber.trim()}
-                      className="flex-1 h-12 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-sm rounded-xl shadow-md flex items-center justify-center gap-2 transition active:scale-[0.99] disabled:opacity-50"
-                    >
-                      {isSubmitting ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          <span>Submitting UTR...</span>
-                        </>
-                      ) : (
-                        <>
-                          <span>Submit UTR</span>
-                          <ArrowRight className="w-4 h-4" />
-                        </>
-                      )}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => {
-                        const chargesEl = document.getElementById('assigned-charges-section');
-                        if (chargesEl) chargesEl?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-                      }}
-                      className="h-12 px-5 border-[#D6E4F5] text-[#64748B] hover:bg-white text-xs font-semibold rounded-xl bg-white"
-                    >
-                      Back to Charges
-                    </Button>
-                  </div>
-                </form>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Trust Badges */}
       <div className="pt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
         <div className="p-4 rounded-2xl bg-white border border-[#D6E4F5] shadow-xs flex items-center justify-center gap-2.5">
@@ -1151,122 +1038,20 @@ export const CustomerPaymentPage: React.FC = () => {
         </div>
       </div>
 
-      {/* ── SUBMIT UTR MODAL ──────────────────────────────────────────── */}
-      {showUtrModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-[#D6E4F5] rounded-3xl max-w-md w-full p-6 sm:p-8 space-y-5 shadow-2xl animate-in zoom-in-95">
-            <div className="flex justify-between items-center pb-3 border-b border-[#D6E4F5]">
-              <div>
-                <h3 className="font-extrabold text-base text-[#0F2A5F]">
-                  Enter Transaction Reference
-                </h3>
-                <span className="text-xs text-[#64748B]">{feeName} • ₹{fee.toLocaleString('en-IN')}</span>
-              </div>
-              <button
-                onClick={() => setShowUtrModal(false)}
-                className="text-[#64748B] hover:text-[#0F172A] p-1.5 rounded-lg hover:bg-[#F7FAFF] transition"
-              >
-                ✕
-              </button>
-            </div>
-
-            <p className="text-xs text-[#64748B] leading-relaxed">
-              Please enter the 12-digit UTR or transaction reference number generated by your banking or UPI app:
-            </p>
-
-            <form onSubmit={handleSubmitUtr} className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="block text-[11px] font-bold text-[#0F172A] uppercase tracking-wider">
-                  12-Digit UTR Reference Number *
-                </label>
-                <Input
-                  value={utrNumber}
-                  onChange={(e) => setUtrNumber(e.target.value)}
-                  placeholder="e.g. 428910482910"
-                  className="bg-[#F7FAFF] border-[#D6E4F5] text-[#0F172A] font-mono text-base h-12 rounded-xl focus:border-[#2563EB] focus:ring-4 focus:ring-[#2563EB]/10"
-                  autoFocus
-                  required
-                />
-              </div>
-
-              <div className="flex space-x-3 pt-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setShowUtrModal(false)}
-                  className="flex-1 h-11 border-[#D6E4F5] text-[#64748B] hover:bg-[#F7FAFF] text-xs font-semibold rounded-xl bg-white"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  disabled={isSubmitting || !utrNumber.trim()}
-                  className="flex-1 h-11 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs rounded-xl shadow-xs flex items-center justify-center gap-1.5"
-                >
-                  {isSubmitting ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Submitting...</span>
-                    </>
-                  ) : (
-                    <span>Submit Payment</span>
-                  )}
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ── INVOICE PREVIEW DIALOG ────────────────────────────────────── */}
-      <Dialog open={invoicePreviewOpen} onOpenChange={setInvoicePreviewOpen}>
-        <DialogContent className="max-w-4xl h-[85vh] flex flex-col p-6 bg-white rounded-3xl border border-[#D6E4F5] shadow-2xl">
-          <DialogHeader className="flex flex-row items-center justify-between pb-3 border-b border-[#D6E4F5]">
-            <div>
-              <DialogTitle className="text-lg font-bold text-[#0F2A5F]">{invoicePreviewTitle}</DialogTitle>
-              <DialogDescription className="text-xs text-[#64748B]">
-                Official immutable tax invoice generated from authoritative financial records.
-              </DialogDescription>
-            </div>
-            {invoicePreviewUrl && (
-              <Button
-                size="sm"
-                onClick={() => {
-                  const a = document.createElement('a');
-                  a.href = invoicePreviewUrl;
-                  a.download = `${invoicePreviewTitle.replace(/\s+/g, '_')}.pdf`;
-                  document.body.appendChild(a);
-                  a.click();
-                  document.body.removeChild(a);
-                }}
-                className="bg-[#16A34A] hover:bg-emerald-700 text-white font-bold text-xs h-9 px-3.5 rounded-xl shadow-xs flex items-center gap-1.5 mr-6"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Download PDF</span>
-              </Button>
-            )}
-          </DialogHeader>
-
-          <div className="flex-1 bg-[#F7FAFF] rounded-2xl overflow-hidden mt-3 relative border border-[#D6E4F5]">
-            {invoicePreviewLoading ? (
-              <div className="flex flex-col items-center justify-center h-full space-y-3">
-                <Loader2 className="w-8 h-8 animate-spin text-[#2563EB]" />
-                <span className="text-xs text-[#64748B]">Rendering invoice PDF...</span>
-              </div>
-            ) : invoicePreviewUrl ? (
-              <iframe
-                src={invoicePreviewUrl}
-                title={invoicePreviewTitle}
-                className="w-full h-full border-0 rounded-2xl"
-              />
-            ) : (
-              <div className="flex items-center justify-center h-full text-xs text-[#64748B]">
-                Invoice preview unavailable.
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* INVOICE PREVIEW — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={invoicePdfViewer.open}
+        onClose={invoicePdfViewer.closeModal}
+        blob={invoicePdfViewer.blob}
+        blobUrl={invoicePdfViewer.blobUrl}
+        pdfBytes={invoicePdfViewer.pdfBytes}
+        loading={invoicePdfViewer.loading}
+        fetchError={invoicePdfViewer.error}
+        title={invoicePreviewTitle || 'Tax Invoice'}
+        description="Official immutable tax invoice generated from authoritative financial records."
+        downloadFilename={`${(invoicePreviewTitle || 'Invoice').replace(/\s+/g, '_')}.pdf`}
+        onRetry={invoicePdfViewer.retry}
+      />
     </div>
   );
 };

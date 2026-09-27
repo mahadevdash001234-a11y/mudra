@@ -21,7 +21,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 export interface RequestOptions extends RequestInit {
   tokenType?: 'customer' | 'admin' | 'auto';
   params?: Record<string, string | number | boolean | undefined>;
-  responseType?: 'blob' | 'json' | 'text';
+  responseType?: 'blob' | 'json' | 'text' | 'arraybuffer';
 }
 
 export interface ApiResponse<T = unknown> {
@@ -105,11 +105,41 @@ export async function apiClient<T>(
   try {
     const response = await fetch(url, config);
 
-    // Handle blob / binary responses
-    const contentType = response.headers?.get ? (response.headers.get('content-type') || '') : '';
-    if (customConfig.cache === 'no-store' && !contentType.includes('application/json')) {
-      // Return raw response for streams
-      return response as unknown as T;
+    // If HTTP error response (401, 403, 404, 500, etc.)
+    if (!response.ok) {
+      let data: any = null;
+      try {
+        const text = await response.text();
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = { message: text };
+        }
+      } catch {
+        data = null;
+      }
+      const errorMessage = data?.message || `HTTP ${response.status}: ${response.statusText}`;
+
+      // Handle token expiration / unauthorized in a role-scoped manner
+      if (response.status === 401 && !cleanEndpoint.includes('/auth/')) {
+        if (cleanEndpoint.startsWith('/admin')) {
+          localStorage.removeItem('loan_approve_admin_token');
+          if (localStorage.getItem('loan_approve_active_role') === 'ADMIN') {
+            localStorage.removeItem('loan_approve_active_role');
+          }
+        } else if (cleanEndpoint.startsWith('/customer') || cleanEndpoint.startsWith('/customers')) {
+          localStorage.removeItem('loan_approve_customer_token');
+          if (localStorage.getItem('loan_approve_active_role') === 'CUSTOMER') {
+            localStorage.removeItem('loan_approve_active_role');
+          }
+        } else {
+          localStorage.removeItem('loan_approve_customer_token');
+          localStorage.removeItem('loan_approve_admin_token');
+          localStorage.removeItem('loan_approve_active_role');
+        }
+      }
+
+      throw new ApiError(response.status, errorMessage, data?.errors);
     }
 
     // Handle 204 No Content
@@ -117,11 +147,23 @@ export async function apiClient<T>(
       return { data: {} } as unknown as T;
     }
 
-    // If client requested blob
+    // If client requested blob for successful HTTP responses
     if ((options as { responseType?: string }).responseType === 'blob') {
       const blob = await response.blob();
       return {
         data: blob,
+        headers: {
+          'content-type': response.headers?.get ? (response.headers.get('content-type') || 'application/octet-stream') : 'application/octet-stream',
+          'content-disposition': response.headers?.get ? (response.headers.get('content-disposition') || '') : '',
+        },
+      } as unknown as T;
+    }
+
+    // If client requested arraybuffer for successful HTTP responses
+    if ((options as { responseType?: string }).responseType === 'arraybuffer') {
+      const arrayBuffer = await response.arrayBuffer();
+      return {
+        data: arrayBuffer,
         headers: {
           'content-type': response.headers?.get ? (response.headers.get('content-type') || 'application/octet-stream') : 'application/octet-stream',
           'content-disposition': response.headers?.get ? (response.headers.get('content-disposition') || '') : '',

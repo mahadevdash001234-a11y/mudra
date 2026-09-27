@@ -133,7 +133,7 @@ describe('Dynamic Payment Method Enable/Disable Frontend Suite', () => {
         });
       }
       if (url.includes('/api/customer/charges')) {
-        return mockJson({ success: true, data: [] });
+        return mockJson({ success: true, data: [{ id: 'chg-1', name: 'Processing Fee', amount: 1250, status: 'PENDING' }] });
       }
       return mockJson({ success: true, data: {} });
     });
@@ -141,15 +141,13 @@ describe('Dynamic Payment Method Enable/Disable Frontend Suite', () => {
     render(<CustomerPaymentPage />, { wrapper: createWrapper() });
 
     await waitFor(() => {
-      expect(screen.getByText('Choose Payment Method')).toBeInTheDocument();
+      expect(screen.getByText(/Select Payment Method|Choose Payment Method/i)).toBeInTheDocument();
     });
 
     // UPI is present
-    expect(screen.getByText('Pay using any UPI app or QR Code')).toBeInTheDocument();
+    expect(screen.getByText(/Pay using any supported UPI app/i)).toBeInTheDocument();
     // Bank Transfer is NOT present
-    expect(screen.queryByText('Bank Account / Bank Transfer')).not.toBeInTheDocument();
-    // Merchant VPA is NOT present
-    expect(screen.queryByText('Merchant UPI ID / VPA')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Pay directly from your bank account/i)).not.toBeInTheDocument();
   });
 
   it('3. CustomerPaymentPage renders ONLY Bank Transfer when UPI is OFF and Bank Transfer is ON', async () => {
@@ -188,7 +186,7 @@ describe('Dynamic Payment Method Enable/Disable Frontend Suite', () => {
         });
       }
       if (url.includes('/api/customer/charges')) {
-        return mockJson({ success: true, data: [] });
+        return mockJson({ success: true, data: [{ id: 'chg-1', name: 'Processing Fee', amount: 1250, status: 'PENDING' }] });
       }
       return mockJson({ success: true, data: {} });
     });
@@ -196,18 +194,16 @@ describe('Dynamic Payment Method Enable/Disable Frontend Suite', () => {
     render(<CustomerPaymentPage />, { wrapper: createWrapper() });
 
     await waitFor(() => {
-      expect(screen.getByText('Choose Payment Method')).toBeInTheDocument();
+      expect(screen.getByText(/Select Payment Method|Choose Payment Method/i)).toBeInTheDocument();
     });
 
     // Bank Transfer is present
-    expect(screen.getByText('Bank Account / Bank Transfer')).toBeInTheDocument();
+    expect(screen.getByText(/Pay directly from your bank account/i)).toBeInTheDocument();
     // UPI is NOT present
-    expect(screen.queryByText('Pay using any UPI app or QR Code')).not.toBeInTheDocument();
-    // Merchant VPA is NOT present
-    expect(screen.queryByText('Merchant UPI ID / VPA')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Pay using any supported UPI app/i)).not.toBeInTheDocument();
   });
 
-  it('4. CustomerPaymentPage shows maintenance warning when ALL payment methods are disabled', async () => {
+  it('4. CustomerPaymentPage shows empty state when no charges exist', async () => {
     global.fetch = vi.fn().mockImplementation((url: string) => {
       if (url.includes('/api/public/config')) {
         return mockJson({ appName: 'Loan Approve' });
@@ -216,8 +212,8 @@ describe('Dynamic Payment Method Enable/Disable Frontend Suite', () => {
         return mockJson({
           success: true,
           data: {
-            feeAmount: 1250,
-            feeType: 'PROCESSING_FEE',
+            feeAmount: 0,
+            feeType: 'NONE',
             paymentMethods: {
               upi: false,
               bankTransfer: false,
@@ -225,18 +221,17 @@ describe('Dynamic Payment Method Enable/Disable Frontend Suite', () => {
             },
             upi: {
               enabled: false,
-              primaryUpiId: 'pay@company',
-              merchantName: 'Financial Services',
+              primaryUpiId: '',
+              merchantName: '',
               apps: [],
-              merchantVpa: { enabled: false, vpa: 'pay@company' },
             },
             bank: {
               enabled: false,
-              accountHolder: 'Financial Services Pvt Ltd',
-              accountNumber: '50200084729104',
-              bankName: 'HDFC Bank',
-              ifsc: 'HDFC0000060',
-              branch: 'Fort, Mumbai',
+              accountHolder: '',
+              accountNumber: '',
+              bankName: '',
+              ifsc: '',
+              branch: '',
             },
             paymentLinks: [],
           },
@@ -251,11 +246,8 @@ describe('Dynamic Payment Method Enable/Disable Frontend Suite', () => {
     render(<CustomerPaymentPage />, { wrapper: createWrapper() });
 
     await waitFor(() => {
-      expect(screen.getByText('Payment Methods Temporarily Unavailable')).toBeInTheDocument();
+      expect(screen.getByText(/No Payment Required Currently|No payment is currently required/i)).toBeInTheDocument();
     });
-
-    const payBtn = screen.getByRole('button', { name: /Pay Securely/i });
-    expect(payBtn).toBeDisabled();
   });
 
   it('5. AdminUpiSettingsPage handles custom QR preview, dynamic fallback and save flow', async () => {

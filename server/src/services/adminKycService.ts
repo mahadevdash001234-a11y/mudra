@@ -1,4 +1,4 @@
-﻿import { prisma } from './db';
+import { prisma } from './db';
 import { AppError } from '../middleware/errorHandler';
 import { auditService } from './auditService';
 import { DocumentType } from '../validators/documentValidators';
@@ -25,7 +25,7 @@ export const adminKycService = {
     if (filters.status && filters.status !== 'ALL') {
       const s = filters.status.toUpperCase();
       if (s === 'PENDING_VERIFICATION') {
-        where.kycStatus = { in: ['PENDING', 'UNDER_REVIEW'] };
+        where.kycStatus = { in: ['PENDING', 'UNDER_REVIEW', 'NOT_SUBMITTED', 'REUPLOAD_REQUIRED'] };
         where.OR = [
           {
             charges: {
@@ -35,6 +35,7 @@ export const adminKycService = {
                   {
                     OR: [
                       { status: 'PAID' },
+                      { status: 'UNDER_VERIFICATION' },
                       { NOT: { transactionRef: null } },
                     ],
                   },
@@ -55,7 +56,7 @@ export const adminKycService = {
           },
         ];
       } else if (s === 'PAYMENT_PENDING') {
-        where.kycStatus = { in: ['PENDING', 'UNDER_REVIEW'] };
+        where.kycStatus = { in: ['PENDING', 'UNDER_REVIEW', 'NOT_SUBMITTED', 'REUPLOAD_REQUIRED'] };
         where.charges = {
           some: {
             OR: [{ name: { contains: 'KYC' } }, { remark: { contains: 'KYC' } }],
@@ -78,12 +79,19 @@ export const adminKycService = {
 
     if (filters.search && filters.search.trim().length > 0) {
       const term = filters.search.trim();
-      where.OR = [
+      const searchCond = [
         { fullName: { contains: term } },
         { mobile: { contains: term } },
         { email: { contains: term } },
         { state: { contains: term } },
       ];
+      if (where.OR) {
+        const existingOr = where.OR;
+        delete where.OR;
+        where.AND = [{ OR: existingOr }, { OR: searchCond }];
+      } else {
+        where.OR = searchCond;
+      }
     }
 
     const [

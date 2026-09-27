@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { API_ENDPOINTS } from '../../api/endpoints';
+import { usePdfViewer } from '../../hooks/usePdfViewer';
+import PdfViewerModal from '../shared/PdfViewerModal';
 
 export interface CustomerDocumentItem {
   id: string;
@@ -79,6 +81,8 @@ export const CustomerDocumentsSection: React.FC<Props> = ({
   const queryClient = useQueryClient();
 
   // Modals state
+  const pdfViewer = usePdfViewer();
+  const [pdfDoc, setPdfDoc] = useState<CustomerDocumentItem | null>(null);
   const [previewDoc, setPreviewDoc] = useState<CustomerDocumentItem | null>(null);
   const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -195,6 +199,13 @@ export const CustomerDocumentsSection: React.FC<Props> = ({
 
   // Action: Open Preview
   const handleOpenPreview = async (doc: CustomerDocumentItem) => {
+    const isPdf = doc.mimeType?.toLowerCase().includes('pdf') || doc.fileName?.toLowerCase().endsWith('.pdf');
+    if (isPdf) {
+      setPdfDoc(doc);
+      await pdfViewer.fetchAndOpen(API_ENDPOINTS.DOCUMENTS.VIEW(doc.id));
+      return;
+    }
+
     setPreviewDoc(doc);
     setPreviewLoading(true);
     if (previewBlobUrl) {
@@ -760,19 +771,11 @@ export const CustomerDocumentsSection: React.FC<Props> = ({
                   <p className="text-xs">Preparing document preview...</p>
                 </div>
               ) : previewBlobUrl ? (
-                previewDoc.mimeType.includes('pdf') ? (
-                  <iframe
-                    src={previewBlobUrl}
-                    title="Document Preview"
-                    className="w-full h-[540px] rounded-xl border border-border bg-white shadow-inner"
-                  />
-                ) : (
-                  <img
-                    src={previewBlobUrl}
-                    alt={previewDoc.fileName}
-                    className="max-h-[540px] max-w-full rounded-xl border border-border object-contain shadow-md"
-                  />
-                )
+                <img
+                  src={previewBlobUrl}
+                  alt={previewDoc.fileName}
+                  className="max-h-[540px] max-w-full rounded-xl border border-border object-contain shadow-md"
+                />
               ) : (
                 <div className="text-center text-text-secondary p-8">
                   <AlertCircle className="w-8 h-8 text-warning mx-auto mb-2" />
@@ -1165,6 +1168,26 @@ export const CustomerDocumentsSection: React.FC<Props> = ({
           </div>
         </div>
       )}
+
+      {/* PDF Document Viewer Modal — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={pdfViewer.open}
+        onClose={() => {
+          pdfViewer.closeModal();
+          setPdfDoc(null);
+        }}
+        blob={pdfViewer.blob}
+        blobUrl={pdfViewer.blobUrl}
+        pdfBytes={pdfViewer.pdfBytes}
+        isImage={pdfViewer.isImage}
+        loading={pdfViewer.loading}
+        fetchError={pdfViewer.error}
+        title={pdfDoc ? `${getDocTypeInfo(pdfDoc.documentType).label} — ${pdfDoc.fileName}` : 'Document Preview'}
+        description="Customer uploaded document"
+        downloadFilename={pdfDoc?.fileName || 'document.pdf'}
+        onDownload={() => pdfDoc && handleDownloadSingle(pdfDoc)}
+        onRetry={pdfViewer.retry}
+      />
     </div>
   );
 };

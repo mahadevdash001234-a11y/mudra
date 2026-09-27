@@ -42,6 +42,8 @@ import { SpecificChargesSection } from '@/components/admin/SpecificChargesSectio
 import { apiClient } from '@/api/client';
 import { API_ENDPOINTS } from '@/api/endpoints';
 import { useAuth } from '@/contexts/AuthContext';
+import { usePdfViewer } from '@/hooks/usePdfViewer';
+import PdfViewerModal from '@/components/shared/PdfViewerModal';
 
 export const AdminLoanDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -68,6 +70,10 @@ export const AdminLoanDetailPage: React.FC = () => {
   const [docDesc, setDocDesc] = useState('');
   const [holdOpen, setHoldOpen] = useState(false);
   const [holdReason, setHoldReason] = useState('');
+  // PDF viewer state for doc/invoice/approval-letter preview
+  const pdfViewer = usePdfViewer();
+  const [pdfViewerTitle, setPdfViewerTitle] = useState('');
+  const [pdfDownloadFn, setPdfDownloadFn] = useState<(() => void) | null>(null);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
   const [adminRemark, setAdminRemark] = useState('');
@@ -259,6 +265,26 @@ export const AdminLoanDetailPage: React.FC = () => {
     },
   });
 
+  const handleViewDocFile = async (docId: string) => {
+    try {
+      setPdfViewerTitle('Customer Document');
+      setPdfDownloadFn(null);
+      await pdfViewer.fetchAndOpen(API_ENDPOINTS.CUSTOMER_DOCS.FILE(docId));
+    } catch (err: any) {
+      setActionError(err.response?.data?.message || 'Failed to open document file.');
+    }
+  };
+
+  const handleViewInvoiceFile = async (chargeIdOrInvoiceId: string) => {
+    try {
+      setPdfViewerTitle('Tax Invoice');
+      setPdfDownloadFn(null);
+      await pdfViewer.fetchAndOpen(API_ENDPOINTS.CHARGES.SPECIFIC.INVOICE(chargeIdOrInvoiceId, false));
+    } catch (err: any) {
+      setActionError(err.response?.data?.message || 'Failed to open invoice PDF.');
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="py-24 flex flex-col items-center justify-center space-y-3">
@@ -437,10 +463,21 @@ export const AdminLoanDetailPage: React.FC = () => {
               variant="outline"
               onClick={async () => {
                 try {
-                  const res = await apiClient.get(`/admin/loans/${app.id}/approval-letter/pdf`, { responseType: 'blob' });
-                  const blob = new Blob([res.data], { type: 'application/pdf' });
-                  const url = window.URL.createObjectURL(blob);
-                  window.open(url, '_blank');
+                  setPdfViewerTitle(`Approval Letter — ${app.applicationNumber}`);
+                  const downloadFn = async () => {
+                    const res2 = await apiClient.get(`/admin/loans/${app.id}/approval-letter/pdf?download=true`, { responseType: 'arraybuffer' });
+                    const blob2 = new Blob([res2.data], { type: 'application/pdf' });
+                    const url2 = URL.createObjectURL(blob2);
+                    const a = document.createElement('a');
+                    a.href = url2;
+                    a.download = `Approval_Letter_${app.applicationNumber}.pdf`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    setTimeout(() => URL.revokeObjectURL(url2), 2000);
+                  };
+                  setPdfDownloadFn(() => downloadFn);
+                  await pdfViewer.fetchAndOpen(`/admin/loans/${app.id}/approval-letter/pdf`);
                 } catch {
                   alert('Could not open approval letter. Please try again.');
                 }
@@ -455,16 +492,16 @@ export const AdminLoanDetailPage: React.FC = () => {
               variant="outline"
               onClick={async () => {
                 try {
-                  const res = await apiClient.get(`/admin/loans/${app.id}/approval-letter/pdf?download=true`, { responseType: 'blob' });
+                  const res = await apiClient.get(`/admin/loans/${app.id}/approval-letter/pdf?download=true`, { responseType: 'arraybuffer' });
                   const blob = new Blob([res.data], { type: 'application/pdf' });
-                  const url = window.URL.createObjectURL(blob);
+                  const url = URL.createObjectURL(blob);
                   const a = document.createElement('a');
                   a.href = url;
                   a.download = `Approval_Letter_${app.applicationNumber}.pdf`;
                   document.body.appendChild(a);
                   a.click();
-                  window.URL.revokeObjectURL(url);
                   document.body.removeChild(a);
+                  setTimeout(() => URL.revokeObjectURL(url), 2000);
                 } catch {
                   alert('Could not download approval letter. Please try again.');
                 }
@@ -990,7 +1027,7 @@ export const AdminLoanDetailPage: React.FC = () => {
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => window.open(`/api/customer/documents/${doc.id}/file`, '_blank')}
+                            onClick={() => handleViewDocFile(doc.id)}
                             className="h-6 px-2 text-[10px] font-semibold border-border text-primary hover:bg-surface"
                           >
                             <Eye className="w-3 h-3 mr-1" /> View File
@@ -1127,7 +1164,7 @@ export const AdminLoanDetailPage: React.FC = () => {
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => window.open(p.invoiceUrl || `/api/customer/invoices/${p.invoiceId}/pdf`, '_blank')}
+                              onClick={() => handleViewInvoiceFile(p.invoiceId || p.chargeId || p.id)}
                               className="h-7 text-[11px] border-border text-primary hover:bg-surface-elevated"
                             >
                               <Receipt className="w-3 h-3 mr-1" /> Invoice
@@ -1198,7 +1235,7 @@ export const AdminLoanDetailPage: React.FC = () => {
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => window.open(p.invoiceUrl || `/api/customer/invoices/${p.invoiceId}/pdf`, '_blank')}
+                              onClick={() => handleViewInvoiceFile(p.invoiceId || p.chargeId || p.id)}
                               className="h-7 text-[11px] border-border text-primary hover:bg-surface-elevated"
                             >
                               <Receipt className="w-3 h-3 mr-1" /> Tax Invoice
@@ -1674,6 +1711,24 @@ export const AdminLoanDetailPage: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Document Viewer Modal — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={pdfViewer.open}
+        onClose={pdfViewer.closeModal}
+        blob={pdfViewer.blob}
+        blobUrl={pdfViewer.blobUrl}
+        pdfBytes={pdfViewer.pdfBytes}
+        isImage={pdfViewer.isImage}
+        loading={pdfViewer.loading}
+        fetchError={pdfViewer.error}
+        title={pdfViewerTitle || 'Document Viewer'}
+        description="Authenticated document viewer"
+        downloadFilename={`${(pdfViewerTitle || 'document').replace(/[\s\/—]+/g, '_')}.pdf`}
+        onDownload={pdfDownloadFn || undefined}
+        onRetry={pdfViewer.retry}
+      />
     </div>
   );
 };
+

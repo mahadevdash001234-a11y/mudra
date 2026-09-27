@@ -29,6 +29,8 @@ import { DataManagementModal, ManagementActionType } from '@/components/admin/Da
 import { BulkActionBar } from '@/components/admin/BulkActionBar';
 import { API_ENDPOINTS } from '@/api/endpoints';
 import { apiClient } from '@/api/client';
+import { usePdfViewer } from '@/hooks/usePdfViewer';
+import PdfViewerModal from '@/components/shared/PdfViewerModal';
 
 
 interface PaymentItem {
@@ -84,6 +86,38 @@ export const AdminPaymentsPage: React.FC = () => {
   const [adminNotes, setAdminNotes] = useState('');
   const [rejectReason, setRejectReason] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
+  const invoicePdfViewer = usePdfViewer();
+  const [selectedInvoicePayment, setSelectedInvoicePayment] = useState<PaymentItem | null>(null);
+
+  const handleViewInvoice = async (payment: PaymentItem) => {
+    try {
+      setSelectedInvoicePayment(payment);
+      const chargeId = (payment as any).chargeId || payment.id;
+      await invoicePdfViewer.fetchAndOpen(API_ENDPOINTS.CHARGES.SPECIFIC.INVOICE(chargeId, false));
+    } catch {
+      alert(`Failed to stream invoice for ${payment.customerName || 'Payment'}.`);
+    }
+  };
+
+  const handleDownloadInvoice = async (payment: PaymentItem) => {
+    try {
+      const chargeId = (payment as any).chargeId || payment.id;
+      const res = await apiClient.get(API_ENDPOINTS.CHARGES.SPECIFIC.INVOICE(chargeId, true), {
+        responseType: 'blob',
+      });
+      const blob = new Blob([res.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Invoice_${payment.chargeType || 'Payment'}_${payment.utr || payment.id}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch {
+      alert(`Failed to download invoice for ${payment.customerName || 'Payment'}.`);
+    }
+  };
 
   // Batch selection state & DataManagementModal state
   const [selectedPaymentIds, setSelectedPaymentIds] = useState<string[]>([]);
@@ -461,6 +495,30 @@ export const AdminPaymentsPage: React.FC = () => {
                           View
                         </Button>
 
+                        {(p.status === 'PAID' || p.status === 'SUCCESS') && (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleViewInvoice(p)}
+                              title="View Tax Invoice"
+                              className="h-7 px-2 text-xs border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 font-bold"
+                            >
+                              <Eye className="w-3.5 h-3.5 mr-1" />
+                              Invoice
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleDownloadInvoice(p)}
+                              title="Download Tax Invoice PDF"
+                              className="h-7 px-2 text-xs bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 font-bold"
+                            >
+                              PDF
+                            </Button>
+                          </>
+                        )}
+
                         {p.status === 'UNDER_VERIFICATION' && (
                           <>
                             <Button
@@ -701,6 +759,25 @@ export const AdminPaymentsPage: React.FC = () => {
         warningMessage={mgmtModalState.warningMessage}
         requireTypedConfirmation={mgmtModalState.requireTypedConfirmation}
         confirmTextRequired="DELETE"
+      />
+
+      {/* Invoice PDF Viewer Modal — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={invoicePdfViewer.open}
+        onClose={() => {
+          invoicePdfViewer.closeModal();
+          setSelectedInvoicePayment(null);
+        }}
+        blob={invoicePdfViewer.blob}
+        blobUrl={invoicePdfViewer.blobUrl}
+        pdfBytes={invoicePdfViewer.pdfBytes}
+        loading={invoicePdfViewer.loading}
+        fetchError={invoicePdfViewer.error}
+        title={`Tax Invoice — ${selectedInvoicePayment?.customerName || 'Payment'}`}
+        description={`UTR: ${selectedInvoicePayment?.utr || 'Pending'} • Type: ${selectedInvoicePayment?.chargeType || 'Charge'}`}
+        downloadFilename={`Invoice_${selectedInvoicePayment?.chargeType || 'Payment'}_${selectedInvoicePayment?.utr || selectedInvoicePayment?.id || 'invoice'}.pdf`}
+        onDownload={() => selectedInvoicePayment && handleDownloadInvoice(selectedInvoicePayment)}
+        onRetry={invoicePdfViewer.retry}
       />
     </div>
   );

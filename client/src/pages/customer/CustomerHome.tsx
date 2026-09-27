@@ -8,13 +8,6 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog';
-import {
   FileText,
   CreditCard,
   Upload,
@@ -40,6 +33,8 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useBrandTitle } from '@/hooks/useBrandTitle';
+import { usePdfViewer } from '@/hooks/usePdfViewer';
+import PdfViewerModal from '@/components/shared/PdfViewerModal';
 
 interface DashboardResponse {
   customer: {
@@ -168,11 +163,10 @@ export const CustomerHome: React.FC = () => {
   const [isSubmittingLoan, setIsSubmittingLoan] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
 
-  // Invoice Preview State
-  const [invoicePreviewOpen, setInvoicePreviewOpen] = useState(false);
-  const [invoicePreviewUrl, setInvoicePreviewUrl] = useState<string | null>(null);
+  // Invoice Preview — uses react-pdf canvas renderer via PdfViewerModal
+  const invoicePdfViewer = usePdfViewer();
+  const letterPdfViewer = usePdfViewer();
   const [invoicePreviewTitle, setInvoicePreviewTitle] = useState('');
-  const [invoicePreviewLoading, setInvoicePreviewLoading] = useState(false);
   const [downloadingInvoiceId, setDownloadingInvoiceId] = useState<string | null>(null);
 
   // 1. Fetch Customer Dashboard Overview
@@ -301,13 +295,13 @@ export const CustomerHome: React.FC = () => {
   const isKycApproved = (customer.kycStatus === 'APPROVED' || customer.kycStatus === 'VERIFIED' || kycSummary.status === 'APPROVED' || kycSummary.status === 'VERIFIED');
 
   // Comprehensive list of all applicable charges including KYC Verification Fee
-  const allApplicableCharges: CustomerChargeItem[] = [...customerCharges];
-  const hasKycCharge = allApplicableCharges.some((c) => /kyc/i.test(c.name));
+  const rawCharges: CustomerChargeItem[] = [...customerCharges];
+  const hasKycCharge = rawCharges.some((c) => /kyc|verification/i.test(c.name));
   if (!hasKycCharge) {
-    allApplicableCharges.unshift({
+    rawCharges.unshift({
       id: 'kyc-verification-fee',
-      name: 'KYC Verification Fee',
-      amount: 99,
+      name: 'KYC Verification Charge',
+      amount: 499,
       status: isKycApproved ? 'PAID' : (kycSummary.status === 'UNDER_REVIEW' ? 'UNDER_VERIFICATION' : 'PENDING'),
       remark: 'Government Identity & Aadhaar KYC Verification Fee',
       dueDate: null,
@@ -317,6 +311,22 @@ export const CustomerHome: React.FC = () => {
       createdAt: new Date().toISOString(),
     });
   }
+
+  const chargeDupMap = new Map<string, CustomerChargeItem>();
+  for (const c of rawCharges) {
+    const key = c.name.trim();
+    const existing = chargeDupMap.get(key);
+    if (!existing) {
+      chargeDupMap.set(key, c);
+    } else {
+      if (existing.status !== 'PAID' && c.status === 'PAID') {
+        chargeDupMap.set(key, c);
+      } else if (existing.status !== 'PAID' && c.status === 'UNDER_VERIFICATION' && c.transactionRef) {
+        chargeDupMap.set(key, c);
+      }
+    }
+  }
+  const allApplicableCharges = Array.from(chargeDupMap.values());
 
   // Combined Invoices list (prioritize /customer/invoices then dashboard.invoices)
   const invoicesList = (customerInvoices && customerInvoices.length > 0)
@@ -374,32 +384,12 @@ export const CustomerHome: React.FC = () => {
     }
   };
 
-  // Handlers for Invoice
+  // Handlers for Invoice — using authenticated arraybuffer fetch, no blob: URL navigation
   const handleViewInvoice = async (invoiceIdOrChargeId: string, title = 'Tax Invoice') => {
-    try {
-      setInvoicePreviewLoading(true);
-      setInvoicePreviewTitle(title);
-      setInvoicePreviewOpen(true);
-      const res = await apiClient.get(
-        API_ENDPOINTS.CUSTOMER_CHARGES.INVOICE(invoiceIdOrChargeId, false),
-        { responseType: 'blob' }
-      );
-      const blob = new Blob([res.data], { type: 'application/pdf' });
-      const url = window.URL.createObjectURL(blob);
-      setInvoicePreviewUrl(url);
-    } catch {
-      try {
-        const res = await apiClient.get(`/customer/invoices/${invoiceIdOrChargeId}/pdf`, { responseType: 'blob' });
-        const blob = new Blob([res.data], { type: 'application/pdf' });
-        const url = window.URL.createObjectURL(blob);
-        setInvoicePreviewUrl(url);
-      } catch {
-        alert('Could not render invoice preview. Please use Download Invoice.');
-        setInvoicePreviewOpen(false);
-      }
-    } finally {
-      setInvoicePreviewLoading(false);
-    }
+    setInvoicePreviewTitle(title);
+    // fetchAndOpen opens modal immediately and fetches PDF bytes via apiClient arraybuffer
+    let endpoint = API_ENDPOINTS.CUSTOMER_CHARGES.INVOICE(invoiceIdOrChargeId, false);
+    await invoicePdfViewer.fetchAndOpen(endpoint);
   };
 
   const handleDownloadInvoice = async (invoiceIdOrChargeId: string, invoiceNumberOrName: string) => {
@@ -409,20 +399,20 @@ export const CustomerHome: React.FC = () => {
       try {
         res = await apiClient.get(
           API_ENDPOINTS.CUSTOMER_CHARGES.INVOICE(invoiceIdOrChargeId, true),
-          { responseType: 'blob' }
+          { responseType: 'arraybuffer' }
         );
       } catch {
-        res = await apiClient.get(`/customer/invoices/${invoiceIdOrChargeId}/pdf?download=true`, { responseType: 'blob' });
+        res = await apiClient.get(`/customer/invoices/${invoiceIdOrChargeId}/pdf?download=true`, { responseType: 'arraybuffer' });
       }
       const blob = new Blob([res.data], { type: 'application/pdf' });
-      const url = window.URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = `Invoice_${invoiceNumberOrName.replace(/\s+/g, '_')}.pdf`;
       document.body.appendChild(a);
       a.click();
-      window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
     } catch {
       alert('Unable to download invoice PDF. Please try again.');
     } finally {
@@ -467,13 +457,14 @@ export const CustomerHome: React.FC = () => {
   const state = profileData?.state || (customer as any).state || '—';
   const pincode = profileData?.pincode || '—';
 
-  // Sanctioned Loan Derived Values
-  const sanctionedAmount = loanSummary?.approvedAmount || loanSummary?.requestedAmount || 0;
+  // Sanctioned Loan Derived Values (Strictly calculated only if loan is APPROVED)
+  const isLoanApproved = loanSummary?.status === 'APPROVED';
+  const sanctionedAmount = (isLoanApproved && loanSummary?.approvedAmount) ? loanSummary.approvedAmount : 0;
   const interestRateValue = loanSummary?.interestRate || 8.5;
-  const monthlyEmiValue = loanSummary?.estimatedEmi || (sanctionedAmount > 0 ? Math.round(sanctionedAmount / (loanSummary?.tenureMonths || 12)) : 0);
+  const monthlyEmiValue = isLoanApproved ? ((loanSummary as any)?.finalEmi || loanSummary?.estimatedEmi || 0) : 0;
   const tenureValue = loanSummary?.tenureMonths || 12;
-  const totalPayableValue = monthlyEmiValue * tenureValue;
-  const totalInterestValue = Math.max(0, totalPayableValue - sanctionedAmount);
+  const totalPayableValue = (isLoanApproved && monthlyEmiValue > 0) ? monthlyEmiValue * tenureValue : 0;
+  const totalInterestValue = (isLoanApproved && totalPayableValue > sanctionedAmount) ? Math.max(0, totalPayableValue - sanctionedAmount) : 0;
 
   return (
     <div className="space-y-8 max-w-6xl mx-auto pb-16 text-[#0B1220]">
@@ -526,17 +517,17 @@ export const CustomerHome: React.FC = () => {
             <div className="bg-white rounded-2xl p-4 border border-[#D7E3F5] text-[#0B1220] shadow-sm space-y-1">
               <span className="text-[10px] text-[#64748B] uppercase font-bold tracking-wider block">Loan Amount</span>
               <span className="text-base sm:text-lg font-black text-[#0B1220] font-mono block">
-                {loanSummary ? `₹${(loanSummary.approvedAmount || loanSummary.requestedAmount).toLocaleString('en-IN')}` : '—'}
+                {loanSummary ? (isLoanApproved && loanSummary.approvedAmount ? `₹${loanSummary.approvedAmount.toLocaleString('en-IN')}` : `₹${loanSummary.requestedAmount.toLocaleString('en-IN')}`) : '—'}
               </span>
               <span className="text-[10px] text-[#64748B]">
-                {loanSummary?.approvedAmount ? 'Sanctioned credit' : 'Borrower requested'}
+                {isLoanApproved && loanSummary?.approvedAmount ? 'Sanctioned credit' : 'Borrower requested'}
               </span>
             </div>
 
             <div className="bg-[#F4F8FF] rounded-2xl p-4 border border-[#D7E3F5] text-[#0B1220] shadow-sm space-y-1">
               <span className="text-[10px] text-[#155EEF] uppercase font-bold tracking-wider block">Monthly EMI</span>
               <span className="text-base sm:text-lg font-black text-[#155EEF] font-mono block">
-                {loanSummary?.estimatedEmi ? `₹${loanSummary.estimatedEmi.toLocaleString('en-IN')}` : (loanSummary ? 'Under Review' : '—')}
+                {isLoanApproved && monthlyEmiValue > 0 ? `₹${monthlyEmiValue.toLocaleString('en-IN')}` : 'Under Review'}
               </span>
               <span className="text-[10px] text-[#64748B]">Monthly installment</span>
             </div>
@@ -696,7 +687,7 @@ export const CustomerHome: React.FC = () => {
               <div className="p-4 rounded-2xl bg-white border border-[#D7E3F5] shadow-xs space-y-1">
                 <span className="text-[10px] text-[#16A34A] font-bold uppercase tracking-wider block">Sanctioned Amount</span>
                 <span className="text-lg sm:text-xl font-black text-[#16A34A] font-mono block">
-                  {loanSummary.approvedAmount ? `₹${loanSummary.approvedAmount.toLocaleString('en-IN')}` : 'Under Review'}
+                  {isLoanApproved && loanSummary.approvedAmount ? `₹${loanSummary.approvedAmount.toLocaleString('en-IN')}` : 'Under Review'}
                 </span>
                 <span className="text-[10px] text-[#64748B]">Approved credit ceiling</span>
               </div>
@@ -704,7 +695,7 @@ export const CustomerHome: React.FC = () => {
               <div className="p-4 rounded-2xl bg-white border border-[#D7E3F5] shadow-xs space-y-1">
                 <span className="text-[10px] text-[#155EEF] font-bold uppercase tracking-wider block">Monthly EMI</span>
                 <span className="text-lg sm:text-xl font-black text-[#155EEF] font-mono block">
-                  {loanSummary.estimatedEmi ? `₹${loanSummary.estimatedEmi.toLocaleString('en-IN')}` : 'Under Review'}
+                  {isLoanApproved && monthlyEmiValue > 0 ? `₹${monthlyEmiValue.toLocaleString('en-IN')}` : 'Under Review'}
                 </span>
                 <span className="text-[10px] text-[#64748B]">Monthly installment</span>
               </div>
@@ -728,7 +719,7 @@ export const CustomerHome: React.FC = () => {
               <div className="p-4 rounded-2xl bg-white border border-[#D7E3F5] shadow-xs space-y-1">
                 <span className="text-[10px] text-[#64748B] font-bold uppercase tracking-wider block">Total Interest</span>
                 <span className="text-lg sm:text-xl font-black text-amber-700 font-mono block">
-                  {loanSummary.estimatedEmi ? `₹${totalInterestValue.toLocaleString('en-IN')}` : 'Under Review'}
+                  {isLoanApproved && totalInterestValue > 0 ? `₹${totalInterestValue.toLocaleString('en-IN')}` : 'Under Review'}
                 </span>
                 <span className="text-[10px] text-[#64748B]">Cumulative interest</span>
               </div>
@@ -736,7 +727,7 @@ export const CustomerHome: React.FC = () => {
               <div className="p-4 rounded-2xl bg-white border border-[#D7E3F5] shadow-xs space-y-1">
                 <span className="text-[10px] text-[#64748B] font-bold uppercase tracking-wider block">Total Repayment</span>
                 <span className="text-lg sm:text-xl font-black text-[#0B1220] font-mono block">
-                  {loanSummary.estimatedEmi ? `₹${totalPayableValue.toLocaleString('en-IN')}` : 'Under Review'}
+                  {isLoanApproved && totalPayableValue > 0 ? `₹${totalPayableValue.toLocaleString('en-IN')}` : 'Under Review'}
                 </span>
                 <span className="text-[10px] text-[#64748B]">Principal + Interest</span>
               </div>
@@ -864,7 +855,7 @@ export const CustomerHome: React.FC = () => {
                       )}
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 shrink-0 flex-wrap">
                       {isPaid ? (
                         <>
                           <Button
@@ -1316,15 +1307,8 @@ export const CustomerHome: React.FC = () => {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={async () => {
-                        try {
-                          const res = await apiClient.get(`/customer/loans/${loanSummary.id}/approval-letter/pdf`, { responseType: 'blob' });
-                          const blob = new Blob([res.data], { type: 'application/pdf' });
-                          const url = window.URL.createObjectURL(blob);
-                          window.open(url, '_blank');
-                        } catch {
-                          alert('Could not render approval letter.');
-                        }
+                      onClick={() => {
+                        letterPdfViewer.fetchAndOpen(`/customer/loans/${loanSummary.id}/approval-letter/pdf`);
                       }}
                       className="flex-1 h-8 text-xs border-[#D7E3F5] text-[#0B1220] hover:bg-[#E8F1FF] rounded-lg"
                     >
@@ -1866,57 +1850,35 @@ export const CustomerHome: React.FC = () => {
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* DIALOG: INVOICE PREVIEW MODAL                                             */}
-      {/* ========================================================================= */}
-      <Dialog open={invoicePreviewOpen} onOpenChange={setInvoicePreviewOpen}>
-        <DialogContent className="max-w-4xl h-[85vh] flex flex-col p-6 bg-white rounded-3xl border border-[#D7E3F5] shadow-2xl">
-          <DialogHeader className="flex flex-row items-center justify-between pb-3 border-b border-[#D7E3F5]">
-            <div>
-              <DialogTitle className="text-lg font-bold text-[#0B1220]">{invoicePreviewTitle}</DialogTitle>
-              <DialogDescription className="text-xs text-[#64748B]">
-                Official immutable tax invoice generated from authoritative financial records.
-              </DialogDescription>
-            </div>
-            {invoicePreviewUrl && (
-              <Button
-                size="sm"
-                onClick={() => {
-                  const a = document.createElement('a');
-                  a.href = invoicePreviewUrl;
-                  a.download = `${invoicePreviewTitle.replace(/\s+/g, '_')}.pdf`;
-                  document.body.appendChild(a);
-                  a.click();
-                  document.body.removeChild(a);
-                }}
-                className="bg-[#16A34A] hover:bg-emerald-700 text-white font-bold text-xs h-9 px-3.5 rounded-xl shadow-xs flex items-center gap-1.5 mr-6"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Download PDF</span>
-              </Button>
-            )}
-          </DialogHeader>
+      {/* INVOICE PREVIEW MODAL — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={invoicePdfViewer.open}
+        onClose={invoicePdfViewer.closeModal}
+        blob={invoicePdfViewer.blob}
+        blobUrl={invoicePdfViewer.blobUrl}
+        pdfBytes={invoicePdfViewer.pdfBytes}
+        loading={invoicePdfViewer.loading}
+        fetchError={invoicePdfViewer.error}
+        title={invoicePreviewTitle || 'Tax Invoice'}
+        description="Official immutable tax invoice generated from authoritative financial records."
+        downloadFilename={`${(invoicePreviewTitle || 'Invoice').replace(/\s+/g, '_')}.pdf`}
+        onRetry={invoicePdfViewer.retry}
+      />
 
-          <div className="flex-1 bg-[#F4F8FF] rounded-2xl overflow-hidden mt-3 relative border border-[#D7E3F5]">
-            {invoicePreviewLoading ? (
-              <div className="flex flex-col items-center justify-center h-full space-y-3">
-                <Loader2 className="w-8 h-8 animate-spin text-[#155EEF]" />
-                <span className="text-xs text-[#64748B]">Rendering official tax invoice...</span>
-              </div>
-            ) : invoicePreviewUrl ? (
-              <iframe
-                src={invoicePreviewUrl}
-                title={invoicePreviewTitle}
-                className="w-full h-full border-0 rounded-2xl"
-              />
-            ) : (
-              <div className="flex items-center justify-center h-full text-xs text-[#64748B]">
-                Invoice preview unavailable. Please use Download PDF.
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* APPROVAL LETTER PREVIEW MODAL — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={letterPdfViewer.open}
+        onClose={letterPdfViewer.closeModal}
+        blob={letterPdfViewer.blob}
+        blobUrl={letterPdfViewer.blobUrl}
+        pdfBytes={letterPdfViewer.pdfBytes}
+        loading={letterPdfViewer.loading}
+        fetchError={letterPdfViewer.error}
+        title="Loan Approval Letter"
+        description="Official sanction document"
+        downloadFilename={`Approval_Letter_${loanSummary?.applicationNumber || 'Loan'}.pdf`}
+        onRetry={letterPdfViewer.retry}
+      />
     </div>
   );
 };

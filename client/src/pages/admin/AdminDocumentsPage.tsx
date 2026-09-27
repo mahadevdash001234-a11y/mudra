@@ -11,7 +11,6 @@ import {
   Eye,
   Download,
   ShieldCheck,
-  AlertCircle,
   Loader2,
   FolderOpen,
 } from 'lucide-react';
@@ -19,15 +18,11 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog';
 import { apiClient } from '@/api/client';
 import { useBrandTitle } from '@/hooks/useBrandTitle';
+import { usePdfViewer } from '@/hooks/usePdfViewer';
+import PdfViewerModal from '@/components/shared/PdfViewerModal';
+import { fetchAuthenticatedPdf, downloadBlob } from '@/utils/pdfClient';
 
 type DocumentCategory = 'ALL' | 'KYC' | 'APPROVAL_LETTER' | 'INVOICE' | 'AGREEMENT' | 'EMI_SCHEDULE';
 
@@ -61,14 +56,11 @@ export const AdminDocumentsPage: React.FC = () => {
   const [searchInput, setSearchInput] = useState(searchParams.get('search') || '');
   const [search, setSearch] = useState(searchParams.get('search') || '');
 
-  // Preview Modal
-  const [previewOpen, setPreviewOpen] = useState(false);
+  // Preview Modal — using react-pdf canvas renderer
+  const docPdfViewer = usePdfViewer();
   const [previewTitle, setPreviewTitle] = useState('');
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
   const [currentDownloadUrl, setCurrentDownloadUrl] = useState<string | null>(null);
   const [currentDownloadName, setCurrentDownloadName] = useState<string>('document.pdf');
-  const [previewError, setPreviewError] = useState<string | null>(null);
 
   // Fetch KYC customers and their uploaded documents
   const { data: kycData, isLoading: kycLoading, refetch: refetchKyc } = useQuery({
@@ -139,8 +131,8 @@ export const AdminDocumentsPage: React.FC = () => {
                 ? 'Rejected'
                 : 'Pending Review',
             generatedAt: doc.uploadedAt || cust.createdAt,
-            viewUrl: `/api/admin/documents/${doc.id}/view`,
-            downloadUrl: `/api/admin/documents/${doc.id}/download`,
+            viewUrl: `/admin/documents/${doc.id}/view`,
+            downloadUrl: `/admin/documents/${doc.id}/download`,
             requiresSigning: false,
           });
         });
@@ -172,8 +164,8 @@ export const AdminDocumentsPage: React.FC = () => {
         statusLabel: isApproved ? 'Sanctioned & Issued' : 'Not generated yet',
         generatedAt: loan.updatedAt || loan.createdAt,
         amount: loan.approvedAmount || loan.requestedAmount,
-        viewUrl: isApproved ? `/api/admin/loans/${loan.id}/approval-letter/pdf` : undefined,
-        downloadUrl: isApproved ? `/api/admin/loans/${loan.id}/approval-letter/pdf?download=true` : undefined,
+        viewUrl: isApproved ? `/admin/loans/${loan.id}/approval-letter/pdf` : undefined,
+        downloadUrl: isApproved ? `/admin/loans/${loan.id}/approval-letter/pdf?download=true` : undefined,
         requiresSigning: false,
       });
 
@@ -202,8 +194,8 @@ export const AdminDocumentsPage: React.FC = () => {
           : 'Awaiting Signature',
         generatedAt: loan.updatedAt,
         amount: loan.approvedAmount || loan.requestedAmount,
-        viewUrl: isApproved ? `/api/admin/loans/${loan.id}/agreement` : undefined,
-        downloadUrl: isApproved ? `/api/admin/loans/${loan.id}/approval-letter/pdf?download=true` : undefined,
+        viewUrl: isApproved ? `/admin/loans/${loan.id}/agreement` : undefined,
+        downloadUrl: isApproved ? `/admin/loans/${loan.id}/approval-letter/pdf?download=true` : undefined,
         requiresSigning: true,
       });
 
@@ -252,8 +244,8 @@ export const AdminDocumentsPage: React.FC = () => {
         statusLabel: isPaid ? 'Paid & Issued' : 'Pending Verification (Not generated yet)',
         generatedAt: charge.paidAt || charge.createdAt,
         amount: charge.amount,
-        viewUrl: isPaid ? `/api/admin/charges/specific/${charge.id}/invoice` : undefined,
-        downloadUrl: isPaid ? `/api/admin/charges/specific/${charge.id}/invoice?download=true` : undefined,
+        viewUrl: isPaid ? `/admin/charges/specific/${charge.id}/invoice` : undefined,
+        downloadUrl: isPaid ? `/admin/charges/specific/${charge.id}/invoice?download=true` : undefined,
         requiresSigning: false,
       });
     });
@@ -287,46 +279,23 @@ export const AdminDocumentsPage: React.FC = () => {
     setSearchParams({ category: activeCategory, ...(searchInput.trim() ? { search: searchInput.trim() } : {}) });
   };
 
-  // Preview handler
+  // Preview handler — uses react-pdf canvas renderer
   const handleViewDocument = async (doc: UnifiedDocument) => {
     if (!doc.viewUrl) return;
-    try {
-      setPreviewLoading(true);
-      setPreviewTitle(doc.title);
-      setCurrentDownloadUrl(doc.downloadUrl || doc.viewUrl);
-      setCurrentDownloadName(doc.fileName || `${doc.title}.pdf`);
-      setPreviewError(null);
-      setPreviewOpen(true);
-
-      const res = await apiClient.get(doc.viewUrl, { responseType: 'blob' });
-      const mime = res.headers['content-type'] || 'application/pdf';
-      const blob = new Blob([res.data], { type: mime });
-      const blobUrl = window.URL.createObjectURL(blob);
-      setPreviewUrl(blobUrl);
-    } catch (err: any) {
-      setPreviewError(err.response?.data?.message || 'Could not load document preview.');
-    } finally {
-      setPreviewLoading(false);
-    }
+    setPreviewTitle(doc.title);
+    setCurrentDownloadUrl(doc.downloadUrl || doc.viewUrl);
+    setCurrentDownloadName(doc.fileName || `${doc.title}.pdf`);
+    await docPdfViewer.fetchAndOpen(doc.viewUrl);
   };
 
-  // Direct download handler (Actual persisted document download)
+  // Direct download handler
   const handleDownloadPersisted = async (downloadUrl?: string, filename?: string) => {
     if (!downloadUrl) return;
     try {
-      const res = await apiClient.get(downloadUrl, { responseType: 'blob' });
-      const mime = res.headers['content-type'] || 'application/pdf';
-      const blob = new Blob([res.data], { type: mime });
-      const blobUrl = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = filename || 'document.pdf';
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(blobUrl);
-      document.body.removeChild(a);
+      const result = await fetchAuthenticatedPdf(downloadUrl, { fallbackFileName: filename });
+      downloadBlob(result.blob, result.fileName);
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Failed to download document.');
+      alert(err.message || 'Failed to download document.');
     }
   };
 
@@ -607,55 +576,22 @@ export const AdminDocumentsPage: React.FC = () => {
         </CardContent>
       </Card>
 
-      {/* ==================================================== */}
-      {/* DOCUMENT PREVIEW MODAL */}
-      {/* ==================================================== */}
-      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-        <DialogContent className="max-w-4xl h-[85vh] flex flex-col p-4">
-          <DialogHeader className="flex flex-row items-center justify-between pb-2 border-b border-border">
-            <div>
-              <DialogTitle className="text-base font-bold text-text-primary">{previewTitle}</DialogTitle>
-              <DialogDescription className="text-xs">
-                Official document stream from authoritative server storage.
-              </DialogDescription>
-            </div>
-            {currentDownloadUrl && (
-              <Button
-                size="sm"
-                onClick={() => handleDownloadPersisted(currentDownloadUrl, currentDownloadName)}
-                className="bg-primary text-primary-foreground text-xs font-semibold"
-              >
-                <Download className="w-3.5 h-3.5 mr-1" />
-                Download PDF
-              </Button>
-            )}
-          </DialogHeader>
-
-          <div className="flex-1 bg-surface-elevated rounded-xl overflow-hidden mt-2 relative">
-            {previewLoading ? (
-              <div className="flex flex-col items-center justify-center h-full space-y-3">
-                <Loader2 className="w-8 h-8 animate-spin text-primary" />
-                <span className="text-xs text-text-secondary">Rendering document stream...</span>
-              </div>
-            ) : previewError ? (
-              <div className="flex flex-col items-center justify-center h-full p-6 text-center space-y-2">
-                <AlertCircle className="w-8 h-8 text-danger" />
-                <p className="text-xs text-danger font-semibold">{previewError}</p>
-              </div>
-            ) : previewUrl ? (
-              <iframe
-                src={previewUrl}
-                title={previewTitle}
-                className="w-full h-full border-0 rounded-xl"
-              />
-            ) : (
-              <div className="flex items-center justify-center h-full text-xs text-text-secondary">
-                Document preview unavailable.
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* DOCUMENT PREVIEW MODAL — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={docPdfViewer.open}
+        onClose={docPdfViewer.closeModal}
+        blob={docPdfViewer.blob}
+        blobUrl={docPdfViewer.blobUrl}
+        pdfBytes={docPdfViewer.pdfBytes}
+        isImage={docPdfViewer.isImage}
+        loading={docPdfViewer.loading}
+        fetchError={docPdfViewer.error}
+        title={previewTitle || 'Document'}
+        description="Official document stream from authoritative server storage."
+        downloadFilename={currentDownloadName || 'document.pdf'}
+        onDownload={currentDownloadUrl ? () => handleDownloadPersisted(currentDownloadUrl, currentDownloadName) : undefined}
+        onRetry={docPdfViewer.retry}
+      />
     </div>
   );
 };

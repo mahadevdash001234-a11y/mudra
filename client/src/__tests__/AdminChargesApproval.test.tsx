@@ -293,8 +293,8 @@ describe('Admin Charges & Fee Approval Workflow', () => {
       expect(screen.getByText('Review Customer Charge Payment', { exact: true })).toBeInTheDocument();
       expect(screen.getByText('View Invoice')).toBeInTheDocument();
       expect(screen.getByText('PDF')).toBeInTheDocument();
-      const viewInvoiceLink = screen.getByRole('link', { name: /View Invoice/i });
-      expect(viewInvoiceLink).toHaveAttribute('href', expect.stringContaining('/invoice'));
+      const viewInvoiceBtn = screen.getByRole('button', { name: /View Invoice/i });
+      expect(viewInvoiceBtn).toBeInTheDocument();
     });
   });
 });

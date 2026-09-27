@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/api/client';
 import { API_ENDPOINTS } from '@/api/endpoints';
+import { usePdfViewer } from '@/hooks/usePdfViewer';
+import PdfViewerModal from '@/components/shared/PdfViewerModal';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -121,8 +123,7 @@ export const SpecificChargesSection: React.FC<SpecificChargesSectionProps> = ({
   const [cancelModalOpen, setCancelModalOpen] = useState(false);
   const [sendModalOpen, setSendModalOpen] = useState(false);
   const [sendAllModalOpen, setSendAllModalOpen] = useState(false);
-  const [invoicePreviewOpen, setInvoicePreviewOpen] = useState(false);
-  const [invoicePdfUrl, setInvoicePdfUrl] = useState<string | null>(null);
+  const invoicePdfViewer = usePdfViewer();
 
   // Selected charge for actions
   const [selectedCharge, setSelectedCharge] = useState<SpecificChargeRecord | null>(null);
@@ -385,13 +386,7 @@ export const SpecificChargesSection: React.FC<SpecificChargesSectionProps> = ({
   const handleViewInvoice = async (charge: SpecificChargeRecord) => {
     try {
       setSelectedCharge(charge);
-      const res = await apiClient.get(API_ENDPOINTS.CHARGES.SPECIFIC.INVOICE(charge.id, false), {
-        responseType: 'blob',
-      });
-      const blob = new Blob([res.data], { type: 'application/pdf' });
-      const url = window.URL.createObjectURL(blob);
-      setInvoicePdfUrl(url);
-      setInvoicePreviewOpen(true);
+      await invoicePdfViewer.fetchAndOpen(API_ENDPOINTS.CHARGES.SPECIFIC.INVOICE(charge.id, false));
     } catch (err: any) {
       const msg = err.response?.data?.message || 'Could not load invoice PDF.';
       setActionError(msg);
@@ -402,17 +397,17 @@ export const SpecificChargesSection: React.FC<SpecificChargesSectionProps> = ({
   const handleDownloadInvoice = async (charge: SpecificChargeRecord) => {
     try {
       const res = await apiClient.get(API_ENDPOINTS.CHARGES.SPECIFIC.INVOICE(charge.id, true), {
-        responseType: 'blob',
+        responseType: 'arraybuffer',
       });
       const blob = new Blob([res.data], { type: 'application/pdf' });
-      const url = window.URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = `Invoice_CHG_${charge.name.replace(/\s+/g, '_')}_${charge.id.slice(0, 8)}.pdf`;
       document.body.appendChild(a);
       a.click();
-      window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
     } catch (err: any) {
       const msg = err.response?.data?.message || 'Failed to download invoice.';
       setActionError(msg);
@@ -1694,51 +1689,22 @@ export const SpecificChargesSection: React.FC<SpecificChargesSectionProps> = ({
       </Dialog>
 
       {/* ==================================================== */}
-      {/* 7. INVOICE PREVIEW MODAL */}
+      {/* 7. INVOICE PREVIEW MODAL — native in-app Blob rendering */}
       {/* ==================================================== */}
-      <Dialog open={invoicePreviewOpen} onOpenChange={setInvoicePreviewOpen}>
-        <DialogContent className="bg-surface-elevated border-border text-text-primary max-w-3xl max-h-[90vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle className="text-base font-bold text-text-primary flex items-center justify-between pr-6">
-              <div className="flex items-center gap-2">
-                <FileText className="w-4 h-4 text-success" />
-                Tax Invoice Preview ({selectedCharge?.name})
-              </div>
-            </DialogTitle>
-          </DialogHeader>
-
-          <div className="flex-1 w-full min-h-[500px] bg-surface-elevated rounded-xl overflow-hidden border border-border">
-            {invoicePdfUrl ? (
-              <iframe src={invoicePdfUrl} className="w-full h-full min-h-[500px]" title="Invoice PDF" />
-            ) : (
-              <div className="py-20 text-center text-text-secondary">Loading invoice document...</div>
-            )}
-          </div>
-
-          <DialogFooter className="border-t border-border pt-3 flex justify-between items-center">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setInvoicePreviewOpen(false)}
-              className="border-border text-text-secondary"
-            >
-              Close
-            </Button>
-            {selectedCharge && (
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => handleDownloadInvoice(selectedCharge)}
-                className="bg-success hover:bg-[#1eb398] text-slate-950 font-bold"
-              >
-                <Download className="w-3.5 h-3.5 mr-1.5" />
-                Download PDF
-              </Button>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <PdfViewerModal
+        open={invoicePdfViewer.open}
+        onClose={invoicePdfViewer.closeModal}
+        blob={invoicePdfViewer.blob}
+        blobUrl={invoicePdfViewer.blobUrl}
+        pdfBytes={invoicePdfViewer.pdfBytes}
+        loading={invoicePdfViewer.loading}
+        fetchError={invoicePdfViewer.error}
+        title={`Tax Invoice Preview${selectedCharge ? ` — ${selectedCharge.name}` : ''}`}
+        description="Authoritative tax invoice for the selected charge"
+        downloadFilename={selectedCharge ? `Invoice_${selectedCharge.name.replace(/\s+/g, '_')}_${selectedCharge.id.slice(0,8)}.pdf` : 'invoice.pdf'}
+        onDownload={() => selectedCharge && handleDownloadInvoice(selectedCharge)}
+        onRetry={invoicePdfViewer.retry}
+      />
     </div>
   );
 };

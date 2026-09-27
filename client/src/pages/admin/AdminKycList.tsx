@@ -22,6 +22,8 @@ import {
 } from 'lucide-react';
 import { apiClient } from '@/api/client';
 import { API_ENDPOINTS } from '@/api/endpoints';
+import { usePdfViewer } from '@/hooks/usePdfViewer';
+import PdfViewerModal from '@/components/shared/PdfViewerModal';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -153,6 +155,11 @@ export const AdminKycList: React.FC = () => {
   const [isSubmittingAction, setIsSubmittingAction] = useState<boolean>(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  // PDF viewer via react-pdf canvas renderer
+  const pdfViewer = usePdfViewer();
+  const [pdfTitle, setPdfTitle] = useState<string>('');
+  const [pdfDownloadName, setPdfDownloadName] = useState<string>('document.pdf');
+
   // Delete state
   const [deleteCustomer, setDeleteCustomer] = useState<KycCustomerItem | null>(null);
   const [isDeletingCustomer, setIsDeletingCustomer] = useState<boolean>(false);
@@ -245,13 +252,9 @@ export const AdminKycList: React.FC = () => {
   // Action: Open secure document file
   const handleOpenDocumentFile = async (documentId: string, fileName: string) => {
     try {
-      const res = await apiClient.get(API_ENDPOINTS.ADMIN.DOCUMENT_FILE(documentId), {
-        responseType: 'blob',
-      });
-      const blob = new Blob([res.data], { type: res.headers['content-type'] });
-      const url = window.URL.createObjectURL(blob);
-      window.open(url, '_blank');
-      setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+      setPdfTitle(`KYC Document — ${fileName}`);
+      setPdfDownloadName(fileName);
+      await pdfViewer.fetchAndOpen(API_ENDPOINTS.ADMIN.DOCUMENT_FILE(documentId));
     } catch {
       setActionError(`Failed to stream document "${fileName}".`);
     }
@@ -308,6 +311,18 @@ export const AdminKycList: React.FC = () => {
       setActionError(msg);
     } finally {
       setIsSubmittingAction(false);
+    }
+  };
+
+  // Action: View Invoice PDF securely
+  const handleViewInvoice = async (chargeId: string, customerName?: string) => {
+    if (!chargeId) return;
+    try {
+      setPdfTitle(`Tax Invoice — ${customerName || 'Customer'}`);
+      setPdfDownloadName(`Invoice_${customerName || 'Customer'}_${chargeId.slice(0, 8)}.pdf`);
+      await pdfViewer.fetchAndOpen(API_ENDPOINTS.CHARGES.SPECIFIC.INVOICE(chargeId, false));
+    } catch {
+      setActionError(`Failed to stream invoice for ${customerName || 'Customer'}.`);
     }
   };
 
@@ -811,7 +826,19 @@ export const AdminKycList: React.FC = () => {
                           Docs
                         </Button>
 
-                        {/* Verify Payment / Approve KYC Action */}
+                        {/* Invoice Button if Paid */}
+                        {c.isKycFeePaid && c.kycChargeId && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleViewInvoice(c.kycChargeId!, c.fullName)}
+                            title="View KYC Fee Tax Invoice"
+                            className="h-9 px-3 text-xs bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100 rounded-xl font-bold"
+                          >
+                            <FileText className="w-3.5 h-3.5 mr-1" />
+                            Invoice
+                          </Button>
+                        )}
                         {canVerify && c.kycStatus !== 'APPROVED' && c.kycStatus !== 'VERIFIED' && (
                           c.isKycFeePaid ? (
                             <Button
@@ -1981,6 +2008,20 @@ export const AdminKycList: React.FC = () => {
         </Dialog>
       )}
 
+      {/* Document Viewer Modal — native in-app Blob rendering, no IDM interception */}
+      <PdfViewerModal
+        open={pdfViewer.open}
+        onClose={pdfViewer.closeModal}
+        blob={pdfViewer.blob}
+        blobUrl={pdfViewer.blobUrl}
+        pdfBytes={pdfViewer.pdfBytes}
+        isImage={pdfViewer.isImage}
+        loading={pdfViewer.loading}
+        fetchError={pdfViewer.error}
+        title={pdfTitle || 'Document Viewer'}
+        downloadFilename={pdfDownloadName || 'document.pdf'}
+        onRetry={pdfViewer.retry}
+      />
     </div>
   );
 };
