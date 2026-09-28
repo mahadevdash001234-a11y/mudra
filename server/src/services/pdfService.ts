@@ -439,8 +439,9 @@ export class PdfService {
         const loanTypeDisplayName = (data.loanType || 'Business Loan').toUpperCase();
         doc.font('Helvetica-Bold').fontSize(8).fillColor('#0f172a').text(`Dear ${applicantDisplayName},`, margin, currentY);
         currentY += 10;
+        const welcomeEntity = companyLegal ? `${companyLegal} (${company})` : company;
         doc.font('Helvetica').fontSize(7.5).fillColor('#1e293b').text(
-          `${companyLegal} welcomes you. We are pleased to inform you that your application for ${loanTypeDisplayName} of amount Rs. ${data.approvedAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })} has been accepted. The information mentioned by you has been investigated securely by the company team through online database checks based on the details provided below. Please go through them carefully and report immediately in case of any discrepancy.`,
+          `${welcomeEntity} welcomes you. We are pleased to inform you that your application for ${loanTypeDisplayName} of amount Rs. ${data.approvedAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })} has been accepted. The information mentioned by you has been investigated securely by the company team through online database checks based on the details provided below. Please go through them carefully and report immediately in case of any discrepancy.`,
           margin,
           currentY,
           { width: contentWidth, align: 'justify', lineGap: 2 }
@@ -487,7 +488,7 @@ export class PdfService {
         const sancH = 26;
         doc.roundedRect(margin, currentY, contentWidth, sancH, 3).lineWidth(0.8).strokeColor('#fde68a').fillAndStroke('#fffbeb', '#fde68a');
         doc.font('Helvetica-Bold').fontSize(8).fillColor('#7f1d1d').text('SANCTIONED LOAN AMOUNT', margin + 10, currentY + 5);
-        doc.font('Helvetica').fontSize(6.5).fillColor('#64748b').text(`${companyLegal || company} Approval`, margin + 10, currentY + 15);
+        doc.font('Helvetica').fontSize(6.5).fillColor('#64748b').text(`${company} Approval`, margin + 10, currentY + 15);
         doc.font('Helvetica-Bold').fontSize(13).fillColor('#7f1d1d').text(
           `Rs. ${Number(data.approvedAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
           margin + contentWidth - 180,
@@ -578,7 +579,7 @@ export class PdfService {
         const footerLineY = pageHeight - 38;
         const footerTextY = pageHeight - 32;
         doc.rect(margin, footerLineY, contentWidth, 0.5).fill('#e2e8f0');
-        doc.font('Helvetica').fontSize(6.5).fillColor('#64748b').text(`Email: ${companyEmail} | Helpline: ${companyPhone}`, margin, footerTextY);
+        doc.font('Helvetica').fontSize(6.5).fillColor('#64748b').text(`${company} | Email: ${companyEmail} | Helpline: ${companyPhone}`, margin, footerTextY);
         doc.font('Helvetica').fontSize(6.5).fillColor('#64748b').text('PAGE 1 OF 2', margin, footerTextY, { width: contentWidth, align: 'right' });
 
         // ==========================================
@@ -613,8 +614,9 @@ export class PdfService {
         }
 
         const p2TitleX = margin + 46;
-        doc.font('Helvetica-Bold').fontSize(13).fillColor('#7f1d1d').text((companyLegal || company).toUpperCase(), p2TitleX, p2Y + 6);
-        doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#b45309').text('DOCUMENT CHECKLIST & VERIFICATION GUIDELINES', p2TitleX, p2Y + 23);
+        doc.font('Helvetica-Bold').fontSize(13).fillColor('#7f1d1d').text(company.toUpperCase(), p2TitleX, p2Y + 6);
+        const p2Sub = companyLegal ? `${companyLegal.toUpperCase()} • DOCUMENT CHECKLIST & GUIDELINES` : 'DOCUMENT CHECKLIST & VERIFICATION GUIDELINES';
+        doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#b45309').text(p2Sub, p2TitleX, p2Y + 23);
 
         // Right Side: DOCUMENTATION Pill Badge + Date + Ref No
         const docBadgeW = 84;
@@ -699,7 +701,7 @@ export class PdfService {
 
         // Page 2 Footer
         doc.rect(margin, footerLineY, contentWidth, 0.5).fill('#e2e8f0');
-        doc.font('Helvetica').fontSize(6.5).fillColor('#64748b').text(`Email: ${companyEmail} | Helpline: ${companyPhone}`, margin, footerTextY);
+        doc.font('Helvetica').fontSize(6.5).fillColor('#64748b').text(`${company} | Email: ${companyEmail} | Helpline: ${companyPhone}`, margin, footerTextY);
         doc.font('Helvetica').fontSize(6.5).fillColor('#64748b').text('PAGE 2 OF 2', margin, footerTextY, { width: contentWidth, align: 'right' });
 
         doc.end();

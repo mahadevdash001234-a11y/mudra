@@ -131,7 +131,7 @@ describe('Charge-Wise Customer Payment Lifecycle & UTR Gating', () => {
     const queryClient = createTestQueryClient();
     render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/customer/payment?charge=stamp_duty']}>
+        <MemoryRouter initialEntries={['/customer/payments?charge=chg-stamp-001']}>
           <CustomerPaymentPage />
         </MemoryRouter>
       </QueryClientProvider>
@@ -242,8 +242,20 @@ describe('Charge-Wise Customer Payment Lifecycle & UTR Gating', () => {
     );
 
     await waitFor(() => {
+      expect(screen.getByText('Stamp Duty')).toBeInTheDocument();
+    });
+
+    const payNowButtons = screen.getAllByRole('button', { name: /Pay Now/i });
+    fireEvent.click(payNowButtons[0]);
+
+    await waitFor(() => {
       expect(screen.getByText(/Select Payment Method|Choose Payment Method/i)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Pay Using UPI/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('UPI'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Pay (with|Using) UPI/i })).toBeInTheDocument();
       expect(screen.queryByPlaceholderText(/428910482910/i)).not.toBeInTheDocument();
     });
   });
@@ -273,10 +285,20 @@ describe('Charge-Wise Customer Payment Lifecycle & UTR Gating', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Pay Using UPI/i })).toBeInTheDocument();
+      expect(screen.getByText('Stamp Duty')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Pay Using UPI/i }));
+    const payNowButtons = screen.getAllByRole('button', { name: /Pay Now/i });
+    fireEvent.click(payNowButtons[0]);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Select Payment Method|Choose Payment Method/i)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('UPI'));
+
+    const payUpiBtn = await screen.findByRole('button', { name: /Pay (with|Using) UPI/i });
+    fireEvent.click(payUpiBtn);
 
     await waitFor(() => {
       expect(screen.getByText(/STAMP DUTY PAYMENT VERIFICATION/i)).toBeInTheDocument();
@@ -311,10 +333,20 @@ describe('Charge-Wise Customer Payment Lifecycle & UTR Gating', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Pay Using UPI/i })).toBeInTheDocument();
+      expect(screen.getByText('Stamp Duty')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Pay Using UPI/i }));
+    const payNowButtons = screen.getAllByRole('button', { name: /Pay Now/i });
+    fireEvent.click(payNowButtons[0]);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Select Payment Method|Choose Payment Method/i)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('UPI'));
+
+    const payUpiBtn = await screen.findByRole('button', { name: /Pay (with|Using) UPI/i });
+    fireEvent.click(payUpiBtn);
 
     const utrInput = await screen.findByPlaceholderText(/428910482910/i, {}, { timeout: 4000 });
     fireEvent.change(utrInput, { target: { value: '507823641928' } });

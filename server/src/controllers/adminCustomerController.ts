@@ -3,6 +3,7 @@ import { adminCustomerService } from '../services/adminCustomerService';
 import { whatsappService } from '../services/whatsappService';
 import { auditService } from '../services/auditService';
 import { AppError } from '../middleware/errorHandler';
+import { sendPdfPreviewResponse } from '../utils/pdfPreviewResponse';
 
 export class AdminCustomerController {
   /**
@@ -157,9 +158,13 @@ export class AdminCustomerController {
         });
       }
 
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.send(buffer);
+      const isDownload = req.query.download === 'true' || req.query.download === '1';
+      if (isDownload) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        return res.send(buffer);
+      }
+      return sendPdfPreviewResponse(res, buffer, filename);
     } catch (err) {
       next(err);
     }
@@ -186,9 +191,13 @@ export class AdminCustomerController {
         });
       }
 
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.send(buffer);
+      const isDownload = req.query.download === 'true' || req.query.download === '1';
+      if (isDownload) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        return res.send(buffer);
+      }
+      return sendPdfPreviewResponse(res, buffer, filename);
     } catch (err) {
       next(err);
     }

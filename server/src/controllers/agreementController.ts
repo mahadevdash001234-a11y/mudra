@@ -6,6 +6,7 @@ import { AppError } from '../middleware/errorHandler';
 import { prisma } from '../services/db';
 import { pdfService } from '../services/pdfService';
 import { storageProvider } from '../providers/storage';
+import { sendPdfPreviewResponse } from '../utils/pdfPreviewResponse';
 
 export class AgreementController {
   /**
@@ -172,12 +173,16 @@ export class AgreementController {
       }
 
       const isDownload = req.query.download === 'true' || req.query.download === '1';
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader(
-        'Content-Disposition',
-        `${isDownload ? 'attachment' : 'inline'}; filename=Loan_Approval_Letter_${loan.applicationNumber}.pdf`
-      );
-      res.send(pdfBuffer);
+      const filename = `Loan_Approval_Letter_${loan.applicationNumber}.pdf`;
+      if (isDownload) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${filename}"`
+        );
+        return res.send(pdfBuffer);
+      }
+      return sendPdfPreviewResponse(res, pdfBuffer, filename);
     } catch (err) {
       next(err);
     }

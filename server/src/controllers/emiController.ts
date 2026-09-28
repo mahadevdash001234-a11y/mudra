@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../services/db';
 import { pdfService } from '../services/pdfService';
 import { AppError } from '../middleware/errorHandler';
+import { sendPdfPreviewResponse } from '../utils/pdfPreviewResponse';
 
 export class EmiController {
   /**
@@ -92,9 +93,14 @@ export class EmiController {
         companyName: branding?.companyName,
       });
 
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=EMI_Schedule_${loan.applicationNumber}.pdf`);
-      res.send(pdfBuffer);
+      const isDownload = req.query.download === 'true' || req.query.download === '1';
+      const filename = `EMI_Schedule_${loan.applicationNumber}.pdf`;
+      if (isDownload) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        return res.send(pdfBuffer);
+      }
+      return sendPdfPreviewResponse(res, pdfBuffer, filename);
     } catch (err) {
       next(err);
     }
@@ -131,9 +137,14 @@ export class EmiController {
         companyName: branding?.companyName,
       });
 
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=Receipt_${payment.receiptNumber}.pdf`);
-      res.send(pdfBuffer);
+      const isDownload = req.query.download === 'true' || req.query.download === '1';
+      const filename = `Receipt_${payment.receiptNumber}.pdf`;
+      if (isDownload) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        return res.send(pdfBuffer);
+      }
+      return sendPdfPreviewResponse(res, pdfBuffer, filename);
     } catch (err) {
       next(err);
     }

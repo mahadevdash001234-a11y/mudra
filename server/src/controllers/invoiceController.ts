@@ -3,6 +3,7 @@ import { prisma } from '../services/db';
 import { pdfService } from '../services/pdfService';
 import { specificChargesService } from '../services/specificChargesService';
 import { AppError } from '../middleware/errorHandler';
+import { sendPdfPreviewResponse } from '../utils/pdfPreviewResponse';
 
 export const invoiceController = {
   /**
@@ -102,13 +103,12 @@ export const invoiceController = {
           req.ip
         );
 
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader(
-          'Content-Disposition',
-          `${download ? 'attachment' : 'inline'}; filename="${filename}"`
-        );
-        res.send(buffer);
-        return;
+        if (download) {
+          res.setHeader('Content-Type', 'application/pdf');
+          res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+          return res.send(buffer);
+        }
+        return sendPdfPreviewResponse(res, buffer, filename);
       }
 
       // Fallback: Generate generic invoice PDF via pdfService
@@ -144,12 +144,12 @@ export const invoiceController = {
       });
 
       const filename = `Invoice-${invoice.invoiceNumber}.pdf`;
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader(
-        'Content-Disposition',
-        `${download ? 'attachment' : 'inline'}; filename="${filename}"`
-      );
-      res.send(pdfBuffer);
+      if (download) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        return res.send(pdfBuffer);
+      }
+      return sendPdfPreviewResponse(res, pdfBuffer, filename);
     } catch (err) {
       next(err);
     }

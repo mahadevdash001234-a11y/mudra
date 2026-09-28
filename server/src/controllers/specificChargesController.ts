@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { specificChargesService } from '../services/specificChargesService';
 import { AppError } from '../middleware/errorHandler';
+import { sendPdfPreviewResponse } from '../utils/pdfPreviewResponse';
 
 export class SpecificChargesController {
   // ==========================================
@@ -266,12 +267,12 @@ export class SpecificChargesController {
         req.ip
       );
 
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader(
-        'Content-Disposition',
-        `${download ? 'attachment' : 'inline'}; filename="${filename}"`
-      );
-      res.send(buffer);
+      if (download) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        return res.send(buffer);
+      }
+      return sendPdfPreviewResponse(res, buffer, filename);
     } catch (err) {
       next(err);
     }
@@ -392,12 +393,12 @@ export class SpecificChargesController {
         req.ip
       );
 
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader(
-        'Content-Disposition',
-        `${download ? 'attachment' : 'inline'}; filename="${filename}"`
-      );
-      res.send(buffer);
+      if (download) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        return res.send(buffer);
+      }
+      return sendPdfPreviewResponse(res, buffer, filename);
     } catch (err) {
       next(err);
     }

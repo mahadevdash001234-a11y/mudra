@@ -127,12 +127,12 @@ describe('KYC & Document Management Suite', () => {
 
       customerADocId = res.body.data.document.id;
 
-      // Customer KYC status should now be UNDER_REVIEW
+      // Customer KYC status should still be PENDING (since back is missing and not submitted)
       const cust = await prisma.customer.findUnique({ where: { id: customerAId } });
-      expect(cust?.kycStatus).toBe('UNDER_REVIEW');
+      expect(cust?.kycStatus).toBe('PENDING');
     });
 
-    it('should successfully upload a valid JPG document (Aadhaar Back)', async () => {
+    it('should successfully upload a valid JPG document (Aadhaar Back) and submit KYC', async () => {
       const imgBuffer = Buffer.from('mock jpg data');
       const res = await request(app)
         .post('/api/customer/documents')
@@ -143,6 +143,15 @@ describe('KYC & Document Management Suite', () => {
       expect(res.status).toBe(201);
       expect(res.body.data.document.documentType).toBe('AADHAAR_BACK');
       expect(res.body.data.document.version).toBe(1);
+
+      // Customer submits KYC
+      const submitRes = await request(app)
+        .post('/api/customer/kyc/submit')
+        .set('Authorization', `Bearer ${customerAToken}`);
+      expect(submitRes.status).toBe(200);
+
+      const cust = await prisma.customer.findUnique({ where: { id: customerAId } });
+      expect(cust?.kycStatus).toBe('UNDER_REVIEW');
     });
   });
 
@@ -180,12 +189,22 @@ describe('KYC & Document Management Suite', () => {
 
   describe('Document File Streaming & IDOR Protection', () => {
     it('should allow customer to stream/download their own document', async () => {
+      // Preview request (anti-IDM JSON Base64 architecture)
       const res = await request(app)
         .get(`/api/customer/documents/${customerADocId}/file`)
         .set('Authorization', `Bearer ${customerAToken}`);
 
       expect(res.status).toBe(200);
-      expect(res.headers['content-type']).toContain('application/pdf');
+      expect(res.body.success).toBe(true);
+      expect(res.body.mimeType).toBe('application/pdf');
+      expect(typeof res.body.data).toBe('string');
+
+      // Direct download request
+      const downloadRes = await request(app)
+        .get(`/api/customer/documents/${customerADocId}/file?download=true`)
+        .set('Authorization', `Bearer ${customerAToken}`);
+      expect(downloadRes.status).toBe(200);
+      expect(downloadRes.headers['content-type']).toContain('application/pdf');
     });
 
     it('should strictly reject customer streaming another customer document (IDOR Protection)', async () => {

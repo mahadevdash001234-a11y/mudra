@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { documentService } from '../services/documentService';
 import { uploadDocumentSchema } from '../validators/documentValidators';
 import { AppError } from '../middleware/errorHandler';
+import { sendPdfPreviewResponse, streamToBuffer } from '../utils/pdfPreviewResponse';
 
 export const documentController = {
   /**
@@ -114,14 +115,21 @@ export const documentController = {
           ipAddress
         );
 
-      res.setHeader('Content-Type', mimeType);
-      res.setHeader('Content-Length', fileSize);
-      res.setHeader(
-        'Content-Disposition',
-        `inline; filename="${encodeURIComponent(fileName)}"`
-      );
+      const isDownload = req.query.download === 'true' || req.query.download === '1';
+      if (isDownload) {
+        res.setHeader('Content-Type', mimeType);
+        if (fileSize) {
+          res.setHeader('Content-Length', fileSize);
+        }
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${encodeURIComponent(fileName)}"`
+        );
+        return stream.pipe(res);
+      }
 
-      stream.pipe(res);
+      const buffer = await streamToBuffer(stream);
+      return sendPdfPreviewResponse(res, buffer, fileName, mimeType);
     } catch (err) {
       next(err);
     }

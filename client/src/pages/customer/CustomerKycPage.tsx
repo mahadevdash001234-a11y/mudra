@@ -759,12 +759,11 @@ export const CustomerKycPage: React.FC = () => {
                   <Button
                     onClick={() => {
                       if (kycCharge?.id) {
-                        navigate(`/customer/payments?chargeId=${kycCharge.id}`);
-                      } else {
-                        navigate('/customer/payments?charge=kyc');
+                        navigate(`/customer/payments?charge=${kycCharge.id}`);
                       }
                     }}
-                    className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs h-10 px-6 rounded-xl shadow-md flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+                    disabled={!kycCharge?.id}
+                    className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs h-10 px-6 rounded-xl shadow-md flex items-center gap-1.5 transition active:scale-95 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <CreditCard className="w-4 h-4" />
                     <span>Pay Now</span>

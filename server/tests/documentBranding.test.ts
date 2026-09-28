@@ -188,31 +188,56 @@ describe('Document Branding + Dynamic PDF Design Suite', () => {
   });
 
   // =========================================================================
-  // TEST 4: Live Document Preview Endpoints
+  // TEST 4: Live Document Preview Endpoints (Anti-IDM JSON Base64 Architecture)
   // =========================================================================
-  it('6. Admin can preview Approval Letter PDF with live branding', async () => {
-    const res = await request(app)
+  it('6. Admin can preview Approval Letter PDF as JSON Base64 (anti-IDM) and download as attachment', async () => {
+    // 6a. Preview returns Content-Type: application/json with Base64 PDF payload
+    const previewRes = await request(app)
       .get('/api/admin/settings/preview/approval-letter')
       .set('Authorization', `Bearer ${adminToken}`);
 
-    expect(res.status).toBe(200);
-    expect(res.headers['content-type']).toBe('application/pdf');
-    expect(res.body).toBeDefined();
-    // PDF Magic bytes: %PDF-
-    const isPdf = res.body.slice(0, 4).toString() === '%PDF';
-    expect(isPdf).toBe(true);
+    expect(previewRes.status).toBe(200);
+    expect(previewRes.headers['content-type']).toContain('application/json');
+    expect(previewRes.body.success).toBe(true);
+    expect(previewRes.body.mimeType).toBe('application/pdf');
+    expect(typeof previewRes.body.data).toBe('string');
+    const previewPdfBuffer = Buffer.from(previewRes.body.data, 'base64');
+    expect(previewPdfBuffer.slice(0, 4).toString()).toBe('%PDF');
+
+    // 6b. Download returns binary application/pdf attachment
+    const downloadRes = await request(app)
+      .get('/api/admin/settings/preview/approval-letter?download=true')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(downloadRes.status).toBe(200);
+    expect(downloadRes.headers['content-type']).toBe('application/pdf');
+    expect(downloadRes.headers['content-disposition']).toContain('attachment');
+    expect(downloadRes.body.slice(0, 4).toString()).toBe('%PDF');
   });
 
-  it('7. Admin can preview Tax Invoice PDF with live branding', async () => {
-    const res = await request(app)
+  it('7. Admin can preview Tax Invoice PDF as JSON Base64 (anti-IDM) and download as attachment', async () => {
+    // 7a. Preview returns Content-Type: application/json with Base64 PDF payload
+    const previewRes = await request(app)
       .get('/api/admin/settings/preview/invoice')
       .set('Authorization', `Bearer ${adminToken}`);
 
-    expect(res.status).toBe(200);
-    expect(res.headers['content-type']).toBe('application/pdf');
-    expect(res.body).toBeDefined();
-    const isPdf = res.body.slice(0, 4).toString() === '%PDF';
-    expect(isPdf).toBe(true);
+    expect(previewRes.status).toBe(200);
+    expect(previewRes.headers['content-type']).toContain('application/json');
+    expect(previewRes.body.success).toBe(true);
+    expect(previewRes.body.mimeType).toBe('application/pdf');
+    expect(typeof previewRes.body.data).toBe('string');
+    const previewPdfBuffer = Buffer.from(previewRes.body.data, 'base64');
+    expect(previewPdfBuffer.slice(0, 4).toString()).toBe('%PDF');
+
+    // 7b. Download returns binary application/pdf attachment
+    const downloadRes = await request(app)
+      .get('/api/admin/settings/preview/invoice?download=true')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(downloadRes.status).toBe(200);
+    expect(downloadRes.headers['content-type']).toBe('application/pdf');
+    expect(downloadRes.headers['content-disposition']).toContain('attachment');
+    expect(downloadRes.body.slice(0, 4).toString()).toBe('%PDF');
   });
 
   // =========================================================================

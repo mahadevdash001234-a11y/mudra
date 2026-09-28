@@ -294,23 +294,8 @@ export const CustomerHome: React.FC = () => {
   const allDocsReady = uploadedCount >= 3; // 3 mandatory (PAN, Bank, Income)
   const isKycApproved = (customer.kycStatus === 'APPROVED' || customer.kycStatus === 'VERIFIED' || kycSummary.status === 'APPROVED' || kycSummary.status === 'VERIFIED');
 
-  // Comprehensive list of all applicable charges including KYC Verification Fee
+  // Authoritative charges from database via API
   const rawCharges: CustomerChargeItem[] = [...customerCharges];
-  const hasKycCharge = rawCharges.some((c) => /kyc|verification/i.test(c.name));
-  if (!hasKycCharge) {
-    rawCharges.unshift({
-      id: 'kyc-verification-fee',
-      name: 'KYC Verification Charge',
-      amount: 499,
-      status: isKycApproved ? 'PAID' : (kycSummary.status === 'UNDER_REVIEW' ? 'UNDER_VERIFICATION' : 'PENDING'),
-      remark: 'Government Identity & Aadhaar KYC Verification Fee',
-      dueDate: null,
-      paidAt: isKycApproved ? (customer as any).updatedAt || new Date().toISOString() : null,
-      transactionRef: isKycApproved ? 'KYC-VERIFIED' : null,
-      loanId: loanSummary?.id || null,
-      createdAt: new Date().toISOString(),
-    });
-  }
 
   const chargeDupMap = new Map<string, CustomerChargeItem>();
   for (const c of rawCharges) {
@@ -634,7 +619,7 @@ export const CustomerHome: React.FC = () => {
             </Link>
 
             <Link
-              to={loanSummary ? `/customer/payment/${loanSummary.id}` : '/customer/payments'}
+              to="/customer/payments"
               className="p-3.5 rounded-2xl bg-white border border-[#D7E3F5] hover:border-[#155EEF] hover:shadow-md transition-all group flex flex-col items-center text-center shadow-xs"
             >
               <div className="w-10 h-10 rounded-xl bg-[#F4F8FF] text-[#155EEF] flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
@@ -890,14 +875,14 @@ export const CustomerHome: React.FC = () => {
                           <Button
                             size="sm"
                             onClick={() => {
-                              navigate(loanSummary ? `/customer/payment/${loanSummary.id}?chargeId=${chg.id}` : `/customer/payments?chargeId=${chg.id}`);
+                              navigate(`/customer/payments?charge=${chg.id}`);
                             }}
                             className="bg-[#155EEF] hover:bg-[#123B8E] text-white text-xs h-9 px-4 font-bold rounded-xl shadow-xs flex items-center gap-1 cursor-pointer"
                           >
                             <span>Pay Now</span>
                             <ArrowRight className="w-3.5 h-3.5" />
                           </Button>
-                          <Link to={loanSummary ? `/customer/payment/${loanSummary.id}?chargeId=${chg.id}` : `/customer/payments?chargeId=${chg.id}`}>
+                          <Link to={`/customer/payments?charge=${chg.id}`}>
                             <Button variant="outline" size="sm" className="text-xs h-9 px-3 border-[#D7E3F5] text-[#0B1220] font-semibold rounded-xl bg-white">
                               Details
                             </Button>
@@ -1539,13 +1524,7 @@ export const CustomerHome: React.FC = () => {
                     onClick={() => {
                       const text = `${notif.title || ''} ${notif.message || ''}`.toLowerCase();
                       if (text.includes('payment') || text.includes('fee') || text.includes('charge') || text.includes('utr') || text.includes('due')) {
-                        let chargeParam = '';
-                        if (text.includes('stamp')) chargeParam = '?charge=stamp_duty';
-                        else if (text.includes('gst')) chargeParam = '?charge=gst';
-                        else if (text.includes('insurance')) chargeParam = '?charge=insurance';
-                        else if (text.includes('processing')) chargeParam = '?charge=processing_fee';
-                        else if (text.includes('late')) chargeParam = '?charge=late_payment';
-                        navigate(`/customer/payment${chargeParam}`);
+                        navigate('/customer/payments');
                       } else {
                         navigate('/customer/notifications');
                       }

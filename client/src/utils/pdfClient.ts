@@ -38,6 +38,22 @@ export interface FetchPdfOptions {
   params?: Record<string, string | number | boolean | undefined>;
 }
 
+export function decodeBase64ToUint8Array(base64: string): Uint8Array {
+  if (typeof atob === 'function') {
+    const binaryString = atob(base64);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes;
+  }
+  if (typeof Buffer !== 'undefined') {
+    return new Uint8Array(Buffer.from(base64, 'base64'));
+  }
+  throw new Error('No base64 decoding mechanism available');
+}
+
 /**
  * Fetch a PDF or document from an authenticated API endpoint as a Blob,
  * create a clean in-memory Blob URL, and parse the filename.
@@ -60,20 +76,24 @@ export async function fetchAuthenticatedPdf(
 
     const rawData = res.data;
 
-    // Check if backend returned a JSON error wrapped in a Blob
-    if (
+    // Check if backend returned a JSON response (either Base64 preview payload or error)
+    let jsonPayload: any = null;
+
+    if (rawData && typeof rawData === 'object' && !(rawData instanceof Blob) && !(rawData instanceof ArrayBuffer)) {
+      jsonPayload = rawData;
+    } else if (
       contentType.includes('application/json') ||
       (rawData instanceof Blob && rawData.type.includes('application/json'))
     ) {
-      let errorText = '';
+      let text = '';
       if (rawData instanceof Blob) {
         if (typeof rawData.text === 'function') {
           try {
-            errorText = await rawData.text();
+            text = await rawData.text();
           } catch {}
         }
-        if (!errorText && typeof FileReader !== 'undefined') {
-          errorText = await new Promise<string>((resolve) => {
+        if (!text && typeof FileReader !== 'undefined') {
+          text = await new Promise<string>((resolve) => {
             const reader = new FileReader();
             reader.onload = () => resolve((reader.result as string) || '');
             reader.onerror = () => resolve('');
@@ -81,19 +101,55 @@ export async function fetchAuthenticatedPdf(
           });
         }
       } else if (typeof rawData === 'string') {
-        errorText = rawData;
-      } else if (rawData && typeof rawData === 'object') {
-        errorText = JSON.stringify(rawData);
+        text = rawData;
+      }
+      try {
+        jsonPayload = JSON.parse(text);
+      } catch {
+        jsonPayload = null;
+      }
+    }
+
+    if (jsonPayload) {
+      // 1. Error response
+      if (jsonPayload.success === false) {
+        throw new Error(jsonPayload.message || jsonPayload.error || 'Failed to load PDF document.');
       }
 
-      let errorMsg = 'Failed to load PDF document.';
-      try {
-        const parsed = JSON.parse(errorText);
-        errorMsg = parsed.message || parsed.error || errorMsg;
-      } catch {
-        if (errorText) errorMsg = errorText;
+      // 2. Success JSON Base64 preview payload (Permanent anti-IDM architecture)
+      if (jsonPayload.success === true && jsonPayload.data && typeof jsonPayload.data === 'string') {
+        const mimeType: string = jsonPayload.mimeType || 'application/pdf';
+        const isImage = mimeType.startsWith('image/');
+        const fileName =
+          jsonPayload.filename ||
+          options.fallbackFileName ||
+          (isImage ? 'document.png' : 'document.pdf');
+
+        const pdfBytes = decodeBase64ToUint8Array(jsonPayload.data);
+        const blob = new Blob([pdfBytes], { type: mimeType });
+
+        if (blob.size === 0) {
+          throw new Error('Server returned an empty document response.');
+        }
+
+        // Validate %PDF magic bytes if expected to be a PDF
+        if (!isImage && mimeType === 'application/pdf') {
+          const first5 = pdfBytes.slice(0, 5);
+          const magic = String.fromCharCode(...first5);
+          if (!magic.startsWith('%PDF')) {
+            throw new Error('Server returned invalid PDF format.');
+          }
+        }
+
+        const blobUrl = URL.createObjectURL(blob);
+        return {
+          blob,
+          blobUrl,
+          fileName,
+          isImage,
+          contentType: mimeType,
+        };
       }
-      throw new Error(errorMsg);
     }
 
     // Determine if the returned file is an image or PDF

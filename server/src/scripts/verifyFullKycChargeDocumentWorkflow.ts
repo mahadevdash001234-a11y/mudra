@@ -248,7 +248,7 @@ async function runVerification() {
 
   // STEP 6: LOAN DOCUMENTS UNLOCK & PAN UPLOAD ACTIVATES PROCESSING FEE
   console.log('\n--- STEP 6: LOAN DOCUMENTS UNLOCK & PROCESSING FEE ACTIVATES ---');
-  // Upload PAN Card now that KYC is APPROVED and KYC charge is PAID
+  // Upload mandatory loan documents (PAN, Bank Statement, Income Proof)
   const docPan = await documentService.uploadDocument(
     customer.id,
     'PAN',
@@ -257,6 +257,24 @@ async function runVerification() {
     '127.0.0.1'
   );
   console.log(`[PASS] PAN Card successfully uploaded! Document ID: ${docPan.id}`);
+
+  const docBank = await documentService.uploadDocument(
+    customer.id,
+    'BANK_STATEMENT',
+    makeMockFile('bank_statement.pdf', dummyFilePath),
+    loan.id,
+    '127.0.0.1'
+  );
+  console.log(`[PASS] Bank Statement successfully uploaded! Document ID: ${docBank.id}`);
+
+  const docIncome = await documentService.uploadDocument(
+    customer.id,
+    'INCOME_PROOF',
+    makeMockFile('salary_slip.pdf', dummyFilePath),
+    loan.id,
+    '127.0.0.1'
+  );
+  console.log(`[PASS] Income Proof successfully uploaded! Document ID: ${docIncome.id}`);
 
   // Query charges: Now both the paid KYC charge and the active Processing Fee should appear
   const postPanCharges = await specificChargesService.listActiveChargesForCustomer(customer.id, loan.id);

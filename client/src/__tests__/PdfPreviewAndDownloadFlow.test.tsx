@@ -1,10 +1,9 @@
-import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { AdminDocumentBrandingPage } from '@/pages/admin/AdminDocumentBrandingPage';
-import { fetchAuthenticatedPdf, downloadBlob } from '@/utils/pdfClient';
+import { fetchAuthenticatedPdf } from '@/utils/pdfClient';
 import PdfViewerModal from '@/components/shared/PdfViewerModal';
 
 // Mock apiClient
@@ -41,7 +40,7 @@ describe('FINAL PDF PREVIEW & IN-MEMORY BLOB DOWNLOAD FLOW SUITE', () => {
 
     // Mock URL object methods
     let blobCounter = 1;
-    mockCreateObjectURL.mockImplementation((blob: Blob) => {
+    mockCreateObjectURL.mockImplementation((_blob: Blob) => {
       return `blob:http://localhost:5173/mock-uuid-${blobCounter++}`;
     });
     mockRevokeObjectURL.mockImplementation(() => {});
@@ -82,9 +81,40 @@ describe('FINAL PDF PREVIEW & IN-MEMORY BLOB DOWNLOAD FLOW SUITE', () => {
     expect(result.blobUrl).not.toContain('#');
   });
 
+  it('TEST 1B: fetchAuthenticatedPdf receives JSON Base64 preview response (Anti-IDM Architecture), decodes to clean Blob URL', async () => {
+    const { apiClient } = await import('@/api/client');
+    const pdfRawText = '%PDF-1.4 Official Approved Letter Bytes';
+    const base64Data = typeof btoa === 'function' ? btoa(pdfRawText) : Buffer.from(pdfRawText).toString('base64');
+
+    const jsonPayload = JSON.stringify({
+      success: true,
+      mimeType: 'application/pdf',
+      filename: 'Approval_Letter_Preview.pdf',
+      data: base64Data,
+    });
+    const mockJsonBlob = new Blob([jsonPayload], { type: 'application/json' });
+
+    (apiClient.get as any).mockResolvedValueOnce({
+      data: mockJsonBlob,
+      headers: {
+        'content-type': 'application/json',
+      },
+    });
+
+    const result = await fetchAuthenticatedPdf('/admin/settings/preview/approval-letter');
+
+    expect(result.blob).toBeInstanceOf(Blob);
+    expect(result.blob.type).toBe('application/pdf');
+    expect(result.blobUrl).toMatch(/^blob:http:\/\/localhost:5173\/mock-uuid-/);
+    expect(result.fileName).toBe('Approval_Letter_Preview.pdf');
+    expect(result.isImage).toBe(false);
+    expect(result.contentType).toBe('application/pdf');
+    expect(result.blobUrl).not.toContain('#');
+  });
+
   it('TEST 2: fetchAuthenticatedPdf detects server JSON error returned in a Blob and throws real error message', async () => {
     const { apiClient } = await import('@/api/client');
-    const errorJson = JSON.stringify({ message: 'Customer KYC must be verified before approval letter can be generated.' });
+    const errorJson = JSON.stringify({ success: false, message: 'Customer KYC must be verified before approval letter can be generated.' });
     const mockJsonBlob = new Blob([errorJson], { type: 'application/json' });
 
     (apiClient.get as any).mockResolvedValueOnce({
@@ -189,12 +219,19 @@ describe('FINAL PDF PREVIEW & IN-MEMORY BLOB DOWNLOAD FLOW SUITE', () => {
         });
       }
       if (url.includes('/admin/settings/preview/approval-letter')) {
-        const mockPdfBlob = new Blob(['%PDF-1.4 Live Generated Letter'], { type: 'application/pdf' });
+        const pdfRawText = '%PDF-1.4 Live Generated Letter';
+        const base64Data = typeof btoa === 'function' ? btoa(pdfRawText) : Buffer.from(pdfRawText).toString('base64');
+        const jsonPayload = JSON.stringify({
+          success: true,
+          mimeType: 'application/pdf',
+          filename: 'Approval_Letter_Preview.pdf',
+          data: base64Data,
+        });
+        const mockJsonBlob = new Blob([jsonPayload], { type: 'application/json' });
         return Promise.resolve({
-          data: mockPdfBlob,
+          data: mockJsonBlob,
           headers: {
-            'content-type': 'application/pdf',
-            'content-disposition': 'inline; filename="Approval_Letter_Preview.pdf"',
+            'content-type': 'application/json',
           },
         });
       }

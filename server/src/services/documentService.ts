@@ -235,43 +235,15 @@ export const documentService = {
       });
     }
 
-    // ── STAGE-GATED CHARGE ACTIVATION ────────────────────────────────────
-    if (isKycDoc) {
-      // Whenever a KYC document is uploaded, customer KYC status transitions to UNDER_REVIEW
-      if (customer.kycStatus === 'PENDING' || customer.kycStatus === 'REUPLOAD_REQUIRED') {
-        await prisma.customer.update({
-          where: { id: customerId },
-          data: { kycStatus: 'UNDER_REVIEW' },
-        });
-      }
-
-      // If Aadhaar Front or Back was uploaded, check if both are now present
-      const allKycDocs = await prisma.loanDocument.findMany({
-        where: {
-          customerId,
-          isCurrentVersion: true,
-          documentType: { in: ['AADHAAR_FRONT', 'AADHAAR_BACK'] },
-          status: { notIn: ['REJECTED'] },
-        },
-      });
-      const hasFront = allKycDocs.some((d) => d.documentType === 'AADHAAR_FRONT');
-      const hasBack = allKycDocs.some((d) => d.documentType === 'AADHAAR_BACK');
-
-      if (hasFront && hasBack) {
-        // Automatically transition customer KYC to UNDER_REVIEW so Admin queue immediately reflects it
-        if (customer.kycStatus === 'PENDING' || customer.kycStatus === 'REUPLOAD_REQUIRED') {
-          await prisma.customer.update({
-            where: { id: customerId },
-            data: { kycStatus: 'UNDER_REVIEW' },
-          });
-        }
-        // Automatically activate the KYC Verification Charge (Status: PENDING)
-        await this.ensureKycChargeActivated(customerId, loanId || undefined);
-      }
-    } else {
+    // ── STAGE-GATED CHARGE ACTIVATION & KYC EVALUATION ───────────────────
+    if (!isKycDoc) {
       // Non-KYC document uploaded (e.g. PAN, Bank Statement, Income Proof)
       // Check if all mandatory loan documents are now uploaded
       await this.checkAndActivateProcessingFee(customerId, loanId || undefined);
+    } else {
+      // Re-evaluate customer's overall KYC status (e.g., transition from REUPLOAD_REQUIRED to UNDER_REVIEW)
+      const { adminKycService } = await import('./adminKycService');
+      await adminKycService.evaluateCustomerKycStatus(customerId, undefined, ipAddress);
     }
 
     // Audit log entry
@@ -900,8 +872,8 @@ export const documentService = {
       data: { status: 'UNDER_REVIEW' },
     });
 
-    // Automatically activate the KYC Verification Charge (Status: PENDING)
-    const kycCharge = await this.ensureKycChargeActivated(customerId);
+    // Note: KYC Verification Charge is created ONLY after explicit Admin KYC approval,
+    // not upon submission when documents are still UNDER_REVIEW.
 
     // Record audit event
     await auditService.record({
@@ -920,7 +892,7 @@ export const documentService = {
       customerId: updatedCustomer.id,
       kycStatus: updatedCustomer.kycStatus,
       statusLabel: 'Pending Verification',
-      kycCharge,
+      kycCharge: null,
       submittedAt: new Date(),
     };
   },

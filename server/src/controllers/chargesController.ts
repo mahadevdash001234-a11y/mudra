@@ -3,6 +3,7 @@ import { prisma } from '../services/db';
 import { auditService } from '../services/auditService';
 import { pdfService } from '../services/pdfService';
 import { AppError } from '../middleware/errorHandler';
+import { sendPdfPreviewResponse } from '../utils/pdfPreviewResponse';
 
 export class ChargesController {
   /**
@@ -375,12 +376,12 @@ export class ChargesController {
         ipAddress,
       });
 
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader(
-        'Content-Disposition',
-        `${download ? 'attachment' : 'inline'}; filename="Invoice_${invoiceNum}.pdf"`
-      );
-      res.send(pdfBuffer);
+      if (download) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="Invoice_${invoiceNum}.pdf"`);
+        return res.send(pdfBuffer);
+      }
+      return sendPdfPreviewResponse(res, pdfBuffer, `Invoice_${invoiceNum}.pdf`);
     } catch (err) {
       next(err);
     }

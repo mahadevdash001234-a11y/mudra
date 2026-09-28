@@ -17,7 +17,14 @@ describe('Safe Data-Management & Destructive Action Safeguards Test Suite', () =
     await prisma.payment.deleteMany({ where: { notes: { contains: 'TEST_DATA_MGMT' } } });
     await prisma.charge.deleteMany({ where: { remark: { contains: 'TEST_DATA_MGMT' } } });
     await prisma.loanApplication.deleteMany({ where: { purpose: 'TEST_DATA_MGMT' } });
-    await prisma.customer.deleteMany({ where: { email: { contains: 'datamgmt_test' } } });
+    await prisma.customer.deleteMany({
+      where: {
+        OR: [
+          { email: { contains: 'datamgmt_test' } },
+          { mobile: '9988776650' },
+        ],
+      },
+    });
   });
 
   afterAll(async () => {
@@ -25,13 +32,20 @@ describe('Safe Data-Management & Destructive Action Safeguards Test Suite', () =
     await prisma.payment.deleteMany({ where: { notes: { contains: 'TEST_DATA_MGMT' } } });
     await prisma.charge.deleteMany({ where: { remark: { contains: 'TEST_DATA_MGMT' } } });
     await prisma.loanApplication.deleteMany({ where: { purpose: 'TEST_DATA_MGMT' } });
-    await prisma.customer.deleteMany({ where: { email: { contains: 'datamgmt_test' } } });
+    await prisma.customer.deleteMany({
+      where: {
+        OR: [
+          { email: { contains: 'datamgmt_test' } },
+          { mobile: '9988776650' },
+        ],
+      },
+    });
   });
 
   it('1. Foreign-Key Protection & Soft-Deactivation: Customer with approved loans cannot be hard deleted', async () => {
     const customer = await prisma.customer.create({
       data: {
-        mobile: '9988776655',
+        mobile: '9988776650',
         email: 'datamgmt_test_fk@example.com',
         fullName: 'FK Test Customer',
         passwordHash: 'dummyhash',

@@ -653,7 +653,7 @@ export const CustomerLoansPage: React.FC = () => {
                       {isPaid ? `Settled on ${new Date(chg.paidAt || chg.updatedAt).toLocaleDateString('en-IN')}` : 'Immediate settlement'}
                     </span>
                     {!isPaid && (
-                      <Link to={`/customer/payments?chargeId=${chg.id}`}>
+                      <Link to={`/customer/payments?charge=${chg.id}`}>
                         <Button size="sm" className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs h-8 px-3.5 font-bold rounded-xl shadow-xs">
                           Pay Now →
                         </Button>

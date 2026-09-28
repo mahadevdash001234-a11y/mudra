@@ -55,6 +55,7 @@ export function usePdfViewer(): UsePdfViewerReturn {
   const lastEndpointRef = useRef<string | null>(null);
   const lastOptionsRef = useRef<{ fallbackFileName?: string; options?: FetchPdfOptions } | null>(null);
   const currentBlobUrlRef = useRef<string | null>(null);
+  const activeRequestIdRef = useRef<number>(0);
 
   // Keep track of current Blob URL for cleanup
   useEffect(() => {
@@ -72,6 +73,7 @@ export function usePdfViewer(): UsePdfViewerReturn {
 
   const fetchPdf = useCallback(
     async (endpoint: string, fallbackFileName?: string, options?: FetchPdfOptions) => {
+      const requestId = ++activeRequestIdRef.current;
       setLoading(true);
       setError(null);
 
@@ -90,6 +92,12 @@ export function usePdfViewer(): UsePdfViewerReturn {
           ...options,
         });
 
+        // Race condition protection: if another request started or modal closed, ignore & cleanup
+        if (activeRequestIdRef.current !== requestId) {
+          URL.revokeObjectURL(result.blobUrl);
+          return;
+        }
+
         setBlob(result.blob);
         setBlobUrl(result.blobUrl);
         setFileName(result.fileName);
@@ -98,17 +106,24 @@ export function usePdfViewer(): UsePdfViewerReturn {
         // Convert blob to arrayBuffer for backwards-compatible consumers
         try {
           const buffer = await result.blob.arrayBuffer();
-          setPdfBytes(buffer);
+          if (activeRequestIdRef.current === requestId) {
+            setPdfBytes(buffer);
+          }
         } catch {
           // In some mock test environments, arrayBuffer might not be implemented on Blob
           setPdfBytes(null);
         }
       } catch (err: unknown) {
+        if (activeRequestIdRef.current !== requestId) {
+          return;
+        }
         console.error('[usePdfViewer] Failed to fetch PDF from:', endpoint, err);
         const msg = err instanceof Error ? err.message : 'Could not load PDF document. Please try again.';
         setError(msg);
       } finally {
-        setLoading(false);
+        if (activeRequestIdRef.current === requestId) {
+          setLoading(false);
+        }
       }
     },
     []
@@ -125,6 +140,7 @@ export function usePdfViewer(): UsePdfViewerReturn {
   );
 
   const closeModal = useCallback(() => {
+    activeRequestIdRef.current++;
     setOpen(false);
     if (currentBlobUrlRef.current) {
       URL.revokeObjectURL(currentBlobUrlRef.current);

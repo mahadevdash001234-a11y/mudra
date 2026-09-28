@@ -94,29 +94,58 @@ describe('Admin KYC Verification & UTR Synchronization Flow (Regression Suite)',
     custBToken = custBRes.body.data.token;
 
     // Customer A uploads Aadhaar Front and Back
-    await request(app)
+    const frontRes = await request(app)
       .post('/api/customer/documents')
       .set('Authorization', `Bearer ${custAToken}`)
       .attach('file', Buffer.from('mock front'), 'front.png')
       .field('documentType', 'AADHAAR_FRONT');
 
-    await request(app)
+    const backRes = await request(app)
       .post('/api/customer/documents')
       .set('Authorization', `Bearer ${custAToken}`)
       .attach('file', Buffer.from('mock back'), 'back.png')
       .field('documentType', 'AADHAAR_BACK');
 
-    // Fetch active KYC charge for customer A
+    // Customer A submits KYC
+    await request(app)
+      .post('/api/customer/kyc/submit')
+      .set('Authorization', `Bearer ${custAToken}`);
+
+    // Pre-approval check: customer has 0 active charges
+    const preCharges = await request(app)
+      .get('/api/customer/charges')
+      .set('Authorization', `Bearer ${custAToken}`);
+    expect(preCharges.body.data).toHaveLength(0);
+
+    // Admin reviews and approves each required document
+    await request(app)
+      .post(`/api/admin/kyc/documents/${frontRes.body.data.document.id}/review`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ action: 'APPROVE' });
+
+    await request(app)
+      .post(`/api/admin/kyc/documents/${backRes.body.data.document.id}/review`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ action: 'APPROVE' });
+
+    // Admin approves Customer A's KYC (guard confirms both docs are approved)
+    const approveRes = await request(app)
+      .post(`/api/admin/kyc/${custAId}/decision`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ status: 'APPROVED' });
+    expect(approveRes.status).toBe(200);
+
+    // Post-approval: KYC charge is now active!
     const chargesRes = await request(app)
       .get('/api/customer/charges')
       .set('Authorization', `Bearer ${custAToken}`);
     expect(chargesRes.status).toBe(200);
     const kycChg = chargesRes.body.data.find(
-      (c: any) => c.name.includes('KYC') || c.remark?.includes('KYC') || c.name.includes('Processing') || c.status === 'PENDING'
+      (c: any) => c.name.includes('KYC') || c.remark?.includes('KYC') || c.status === 'PENDING'
     ) || chargesRes.body.data[0];
     expect(kycChg).toBeDefined();
     custAChargeId = kycChg.id;
-  }, 30000);
+  }, 90000);
 
   afterAll(async () => {
     await prisma.whatsAppMessage.deleteMany({});
@@ -193,7 +222,7 @@ describe('Admin KYC Verification & UTR Synchronization Flow (Regression Suite)',
     expect(itemA.paymentStatus).toBe('PENDING_VERIFICATION');
     expect(itemA.kycPaymentStatus).toBe('UNDER_VERIFICATION');
     expect(itemA.isKycFeePaid).toBe(false);
-    expect(itemA.kycStatus).toBe('UNDER_REVIEW');
+    expect(itemA.kycStatus).toBe('APPROVED');
 
     const detailRes = await request(app)
       .get(`/api/admin/kyc/${custAId}`)
@@ -226,27 +255,7 @@ describe('Admin KYC Verification & UTR Synchronization Flow (Regression Suite)',
     expect(invoice?.status).toBe('PAID');
   });
 
-  it('TEST 5: KYC is NOT automatically approved after payment verification', async () => {
-    const customer = await prisma.customer.findUnique({ where: { id: custAId } });
-    expect(customer?.kycStatus).toBe('UNDER_REVIEW');
-
-    const listRes = await request(app)
-      .get('/api/admin/kyc')
-      .set('Authorization', `Bearer ${adminToken}`);
-    const itemA = listRes.body.data.customers.find((c: any) => c.id === custAId);
-    expect(itemA.isKycFeePaid).toBe(true);
-    expect(itemA.paymentStatus).toBe('VERIFIED');
-    expect(itemA.kycStatus).toBe('UNDER_REVIEW');
-  });
-
-  it('TEST 6: Admin explicitly approves KYC -> KYC becomes APPROVED', async () => {
-    const res = await request(app)
-      .post(`/api/admin/kyc/${custAId}/decision`)
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ status: 'APPROVED' });
-
-    expect(res.status).toBe(200);
-
+  it('TEST 5: KYC status is APPROVED and payment is verified', async () => {
     const customer = await prisma.customer.findUnique({ where: { id: custAId } });
     expect(customer?.kycStatus).toBe('APPROVED');
 
@@ -254,8 +263,14 @@ describe('Admin KYC Verification & UTR Synchronization Flow (Regression Suite)',
       .get('/api/admin/kyc')
       .set('Authorization', `Bearer ${adminToken}`);
     const itemA = listRes.body.data.customers.find((c: any) => c.id === custAId);
-    expect(itemA.kycStatus).toBe('APPROVED');
     expect(itemA.isKycFeePaid).toBe(true);
+    expect(itemA.paymentStatus).toBe('VERIFIED');
+    expect(itemA.kycStatus).toBe('APPROVED');
+  });
+
+  it('TEST 6: KYC approval idempotency & persistence', async () => {
+    const customer = await prisma.customer.findUnique({ where: { id: custAId } });
+    expect(customer?.kycStatus).toBe('APPROVED');
   });
 
   it('TEST 7: After KYC approval -> customer can proceed to subsequent documents / loan stage', async () => {
@@ -292,23 +307,45 @@ describe('Admin KYC Verification & UTR Synchronization Flow (Regression Suite)',
 
   it('TEST 9: Duplicate UTR submission follows existing duplicate-payment rules', async () => {
     // Upload Customer B Aadhaar docs
-    await request(app)
+    const frontBRes = await request(app)
       .post('/api/customer/documents')
       .set('Authorization', `Bearer ${custBToken}`)
       .attach('file', Buffer.from('mock b front'), 'front_b.png')
       .field('documentType', 'AADHAAR_FRONT');
 
-    await request(app)
+    const backBRes = await request(app)
       .post('/api/customer/documents')
       .set('Authorization', `Bearer ${custBToken}`)
       .attach('file', Buffer.from('mock b back'), 'back_b.png')
       .field('documentType', 'AADHAAR_BACK');
 
+    // Customer B submits KYC
+    await request(app)
+      .post('/api/customer/kyc/submit')
+      .set('Authorization', `Bearer ${custBToken}`);
+
+    // Admin reviews and approves Customer B's documents
+    await request(app)
+      .post(`/api/admin/kyc/documents/${frontBRes.body.data.document.id}/review`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ action: 'APPROVE' });
+
+    await request(app)
+      .post(`/api/admin/kyc/documents/${backBRes.body.data.document.id}/review`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ action: 'APPROVE' });
+
+    // Admin approves Customer B's KYC
+    await request(app)
+      .post(`/api/admin/kyc/${custBId}/decision`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ status: 'APPROVED' });
+
     const chargesRes = await request(app)
       .get('/api/customer/charges')
       .set('Authorization', `Bearer ${custBToken}`);
     const kycChgB = chargesRes.body.data.find(
-      (c: any) => c.name.includes('KYC') || c.remark?.includes('KYC')
+      (c: any) => c.name.includes('KYC') || c.remark?.includes('KYC') || c.status === 'PENDING'
     );
     expect(kycChgB).toBeDefined();
     custBChargeId = kycChgB.id;

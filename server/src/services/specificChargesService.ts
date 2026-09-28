@@ -359,71 +359,9 @@ export class SpecificChargesService {
 
     // STAGE 0 & 1: Before KYC verification is approved
     if (!isKycApproved) {
-      // Check if customer has uploaded BOTH Aadhaar Front and Aadhaar Back
-      const aadhaarDocs = await prisma.loanDocument.findMany({
-        where: {
-          customerId,
-          documentType: { in: ['AADHAAR_FRONT', 'AADHAAR_BACK'] },
-          isCurrentVersion: true,
-          status: { notIn: ['REJECTED', 'REUPLOAD_REQUIRED'] },
-        },
-      });
-      const hasAadhaarFront = aadhaarDocs.some((d) => d.documentType === 'AADHAAR_FRONT');
-      const hasAadhaarBack = aadhaarDocs.some((d) => d.documentType === 'AADHAAR_BACK');
-      const hasBothAadhaar = hasAadhaarFront && hasAadhaarBack;
-
-      // STAGE 0: Before KYC documents are submitted -> NO payment is active / visible
-      if (!hasBothAadhaar) {
-        return [];
-      }
-
-      // STAGE 1: Both Aadhaar documents are submitted -> KYC Verification Charge is active
-      if (!kycCharge) {
-        const paymentConfig = await prisma.paymentConfig.findUnique({ where: { id: 'default' } });
-        const kycAmount = paymentConfig?.kycChargeAmount || 499;
-        const latestLoan = await prisma.loanApplication.findFirst({
-          where: { customerId },
-          orderBy: { createdAt: 'desc' },
-        });
-
-        const createdKycCharge = await prisma.charge.create({
-          data: {
-            name: 'KYC Verification Charge',
-            amount: kycAmount,
-            type: 'FIXED',
-            isMandatory: true,
-            isActive: true,
-            status: 'PENDING',
-            customerId,
-            loanId: latestLoan?.id || null,
-            remark: 'Mandatory KYC Verification Fee',
-            sentAt: new Date(),
-          },
-          include: {
-            customer: { select: { id: true, fullName: true, mobile: true, email: true } },
-            loan: { select: { id: true, applicationNumber: true, accountNumber: true } },
-          },
-        });
-        return [createdKycCharge];
-      }
-
-      // Synchronize pending unsubmitted KYC charge with latest paymentConfig
-      if (kycCharge.status === 'PENDING' && !kycCharge.transactionRef && !kycCharge.paymentId) {
-        const paymentConfig = await prisma.paymentConfig.findUnique({ where: { id: 'default' } });
-        if (paymentConfig && paymentConfig.kycChargeAmount && kycCharge.amount !== paymentConfig.kycChargeAmount) {
-          const updatedKycCharge = await prisma.charge.update({
-            where: { id: kycCharge.id },
-            data: { amount: paymentConfig.kycChargeAmount },
-            include: {
-              customer: { select: { id: true, fullName: true, mobile: true, email: true } },
-              loan: { select: { id: true, applicationNumber: true, accountNumber: true } },
-            },
-          });
-          return [updatedKycCharge];
-        }
-      }
-
-      return [kycCharge];
+      // KYC is not approved yet: strictly NO active or payable charges are visible.
+      // GET endpoints must never have side effects or create financial charges.
+      return [];
     }
 
     // STAGE 2: KYC is Approved, but KYC Charge is not paid (edge case)
@@ -465,33 +403,8 @@ export class SpecificChargesService {
         c.remark?.includes('Loan Document')
     );
 
-    if (isLoanDocFeeEnabled) {
-      if (!loanDocCharge) {
-        const latestLoan = await prisma.loanApplication.findFirst({
-          where: { customerId },
-          orderBy: { createdAt: 'desc' },
-        });
-
-        loanDocCharge = await prisma.charge.create({
-          data: {
-            name: 'Loan Document Upload Fee',
-            amount: loanDocFeeAmount,
-            type: 'FIXED',
-            isMandatory: true,
-            isActive: true,
-            status: 'PENDING',
-            customerId,
-            loanId: latestLoan?.id || null,
-            remark: 'Loan Document Processing Fee',
-            sentAt: new Date(),
-          },
-          include: {
-            customer: { select: { id: true, fullName: true, mobile: true, email: true } },
-            loan: { select: { id: true, applicationNumber: true, accountNumber: true } },
-          },
-        });
-        allCharges.unshift(loanDocCharge);
-      } else if (loanDocCharge.status === 'PENDING' && !loanDocCharge.transactionRef && !loanDocCharge.paymentId) {
+    if (isLoanDocFeeEnabled && loanDocCharge) {
+      if (loanDocCharge.status === 'PENDING' && !loanDocCharge.transactionRef && !loanDocCharge.paymentId) {
         if (loanDocCharge.amount !== loanDocFeeAmount) {
           loanDocCharge = await prisma.charge.update({
             where: { id: loanDocCharge.id },
@@ -1266,14 +1179,6 @@ export class SpecificChargesService {
       });
     }
 
-    // If this is a KYC charge and customer's kycStatus is PENDING, transition to UNDER_REVIEW
-    const custRecord = await prisma.customer.findUnique({ where: { id: customerId } });
-    if (isKycCharge && custRecord && custRecord.kycStatus === 'PENDING') {
-      await prisma.customer.update({
-        where: { id: customerId },
-        data: { kycStatus: 'UNDER_REVIEW' },
-      });
-    }
 
     // Notify Admin
     await prisma.notification.create({
@@ -1652,7 +1557,7 @@ export class SpecificChargesService {
           create: {
             invoiceNumber: invoiceNum,
             customerId: charge.customerId || customer?.id || '',
-            loanId: charge.loanId || loanApp?.id || '',
+            loanId: charge.loanId || loanApp?.id || null,
             chargeId: charge.id,
             paymentId: charge.paymentId,
             chargeName: charge.name,

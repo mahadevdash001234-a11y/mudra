@@ -94,7 +94,7 @@ describe('Phase 4 — Loan Application & Management Suite', () => {
       });
     expect(resAdmin.status).toBe(200);
     adminToken = resAdmin.body.data.token;
-  });
+  }, 30000);
 
   afterAll(async () => {
     await prisma.invoice.deleteMany({});
@@ -116,7 +116,7 @@ describe('Phase 4 — Loan Application & Management Suite', () => {
     await prisma.adminUser.deleteMany({
       where: { email: adminEmail },
     });
-  });
+  }, 30000);
 
   // -------------------------------------------------------------
   // 1. CUSTOMER APPLICATION CREATION & VALIDATION

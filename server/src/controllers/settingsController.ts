@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { settingsService } from '../services/settingsService';
 import { pdfService } from '../services/pdfService';
+import { sendPdfPreviewResponse } from '../utils/pdfPreviewResponse';
 import {
   updateBrandingSchema,
   updateDocumentBrandingSchema,
@@ -106,9 +107,13 @@ export class SettingsController {
         verificationUrl: `https://loanapprove.com/verify/document/LN20260906142729`,
       });
 
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', 'inline; filename="Preview_Approval_Letter.pdf"');
-      res.status(200).send(pdfBuffer);
+      const isDownload = req.query.download === 'true' || req.query.download === '1';
+      if (isDownload) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'attachment; filename="Preview_Approval_Letter.pdf"');
+        return res.status(200).send(pdfBuffer);
+      }
+      return sendPdfPreviewResponse(res, pdfBuffer, 'Preview_Approval_Letter.pdf');
     } catch (err) {
       next(err);
     }
@@ -151,9 +156,13 @@ export class SettingsController {
         generatedDate: new Date(),
       });
 
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', 'inline; filename="Preview_Invoice.pdf"');
-      res.status(200).send(pdfBuffer);
+      const isDownload = req.query.download === 'true' || req.query.download === '1';
+      if (isDownload) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'attachment; filename="Preview_Invoice.pdf"');
+        return res.status(200).send(pdfBuffer);
+      }
+      return sendPdfPreviewResponse(res, pdfBuffer, 'Preview_Invoice.pdf');
     } catch (err) {
       next(err);
     }

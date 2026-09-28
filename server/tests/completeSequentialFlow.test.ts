@@ -14,6 +14,8 @@ describe('Complete Sequential Workflow Verification — 14-Step Real World Flow'
   let customerToken: string;
   let customerId: string;
   let adminToken: string;
+  let frontDocId: string;
+  let backDocId: string;
   let kycChargeId: string;
   let processingChargeId: string;
   let gstChargeId: string;
@@ -101,7 +103,7 @@ describe('Complete Sequential Workflow Verification — 14-Step Real World Flow'
     await prisma.adminUser.deleteMany({ where: { email: adminEmail } });
   });
 
-  it('Step 1: Customer uploads Aadhaar Front + Back -> KYC is SUBMITTED / UNDER_REVIEW (Not prematurely verified)', async () => {
+  it('Step 1: Customer uploads Aadhaar Front + Back and Submits -> KYC is UNDER_REVIEW (Zero premature charges)', async () => {
     // Upload Aadhaar Front
     const frontRes = await request(app)
       .post('/api/customer/documents')
@@ -109,10 +111,11 @@ describe('Complete Sequential Workflow Verification — 14-Step Real World Flow'
       .attach('file', Buffer.from('mock front pdf content'), 'aadhaar_front.pdf')
       .field('documentType', 'AADHAAR_FRONT');
     expect(frontRes.status).toBe(201);
+    frontDocId = frontRes.body.data.document.id;
 
-    // Profile check - should still be under review, NOT approved
+    // Profile check - should still be PENDING (not yet submitted, back missing)
     let prof = await prisma.customer.findUnique({ where: { id: customerId } });
-    expect(prof?.kycStatus).toBe('UNDER_REVIEW');
+    expect(prof?.kycStatus).toBe('PENDING');
 
     // Upload Aadhaar Back
     const backRes = await request(app)
@@ -121,13 +124,64 @@ describe('Complete Sequential Workflow Verification — 14-Step Real World Flow'
       .attach('file', Buffer.from('mock back pdf content'), 'aadhaar_back.pdf')
       .field('documentType', 'AADHAAR_BACK');
     expect(backRes.status).toBe(201);
+    backDocId = backRes.body.data.document.id;
+
+    // Customer submits KYC
+    const submitRes = await request(app)
+      .post('/api/customer/kyc/submit')
+      .set('Authorization', `Bearer ${customerToken}`);
+    expect(submitRes.status).toBe(200);
 
     prof = await prisma.customer.findUnique({ where: { id: customerId } });
     expect(prof?.kycStatus).toBe('UNDER_REVIEW');
     expect(prof?.kycStatus).not.toBe('APPROVED');
+
+    // Charges check: Pre-approval charges MUST NOT EXIST
+    const preCharges = await request(app)
+      .get('/api/customer/charges')
+      .set('Authorization', `Bearer ${customerToken}`);
+    expect(preCharges.status).toBe(200);
+    expect(preCharges.body.data).toEqual([]);
   });
 
-  it('Step 2: KYC charge becomes active -> Customer sees ONLY KYC charge (future charges are hidden)', async () => {
+  it('Step 2 Gate Check: Attempting to upload loan documents before KYC is approved is blocked with 403', async () => {
+    // Attempting to upload PAN before KYC approval is blocked
+    const panFail = await request(app)
+      .post('/api/customer/documents')
+      .set('Authorization', `Bearer ${customerToken}`)
+      .attach('file', Buffer.from('mock pan content'), 'pan.pdf')
+      .field('documentType', 'PAN');
+
+    expect(panFail.status).toBe(403);
+  });
+
+  it('Step 3: Admin verifies KYC -> KYC = APPROVED, KYC charge is activated', async () => {
+    // Admin reviews and approves each required document first (document-level verification)
+    const revFront = await request(app)
+      .post(`/api/admin/kyc/documents/${frontDocId}/review`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ action: 'APPROVE' });
+    expect(revFront.status).toBe(200);
+
+    const revBack = await request(app)
+      .post(`/api/admin/kyc/documents/${backDocId}/review`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ action: 'APPROVE' });
+    expect(revBack.status).toBe(200);
+
+    const decRes = await request(app)
+      .post(`/api/admin/kyc/${customerId}/decision`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        status: 'APPROVED',
+        reason: 'Identity and Aadhaar credentials verified by compliance',
+      });
+
+    expect(decRes.status).toBe(200);
+    const prof = await prisma.customer.findUnique({ where: { id: customerId } });
+    expect(prof?.kycStatus).toBe('APPROVED');
+
+    // KYC charge is now active and visible
     const chargesRes = await request(app)
       .get('/api/customer/charges')
       .set('Authorization', `Bearer ${customerToken}`);
@@ -146,18 +200,7 @@ describe('Complete Sequential Workflow Verification — 14-Step Real World Flow'
     expect(chargeNames).not.toContain('Stamp Duty');
   });
 
-  it('Step 2 Gate Check: Attempting to pay an inactive future charge or uploading loan documents before KYC is blocked with 403', async () => {
-    // Attempting to upload PAN before KYC approval and payment
-    const panFail = await request(app)
-      .post('/api/customer/documents')
-      .set('Authorization', `Bearer ${customerToken}`)
-      .attach('file', Buffer.from('mock pan content'), 'pan.pdf')
-      .field('documentType', 'PAN');
-
-    expect(panFail.status).toBe(403);
-  });
-
-  it('Step 3: Customer pays KYC fee and submits UTR -> Status = UNDER_VERIFICATION', async () => {
+  it('Step 4: Customer pays KYC fee and submits UTR -> Status = UNDER_VERIFICATION', async () => {
     const payRes = await request(app)
       .post(`/api/customer/charges/${kycChargeId}/pay`)
       .set('Authorization', `Bearer ${customerToken}`)
@@ -170,13 +213,9 @@ describe('Complete Sequential Workflow Verification — 14-Step Real World Flow'
     expect(payRes.status).toBe(201);
     expect(payRes.body.data.payment.status).toBe('UNDER_VERIFICATION');
     expect(payRes.body.data.charge.transactionRef).toBe('987654321098');
-
-    // Profile check - still UNDER_REVIEW, not verified!
-    const prof = await prisma.customer.findUnique({ where: { id: customerId } });
-    expect(prof?.kycStatus).toBe('UNDER_REVIEW');
   });
 
-  it('Step 4: Admin verifies payment -> KYC Charge = PAID, Invoice is generated idempotently', async () => {
+  it('Step 5: Admin verifies payment -> KYC Charge = PAID, Invoice is generated idempotently', async () => {
     const verifyRes = await request(app)
       .post(`/api/admin/charges/specific/${kycChargeId}/verify-payment`)
       .set('Authorization', `Bearer ${adminToken}`);
@@ -198,32 +237,9 @@ describe('Complete Sequential Workflow Verification — 14-Step Real World Flow'
       .get(`/api/customer/charges/${kycChargeId}/invoice`)
       .set('Authorization', `Bearer ${customerToken}`);
     expect(invRes.status).toBe(200);
-    expect(invRes.headers['content-type']).toContain('application/pdf');
-  });
-
-  it('Step 4 Gate Check: Admin CANNOT verify KYC if fee is unpaid (tested via check logic)', async () => {
-    // Admin list shows customer with fee paid
-    const kycListRes = await request(app)
-      .get('/api/admin/kyc')
-      .set('Authorization', `Bearer ${adminToken}`);
-    expect(kycListRes.status).toBe(200);
-    const customers = kycListRes.body.data?.customers || kycListRes.body.data;
-    const targetCust = customers.find((c: any) => c.id === customerId);
-    expect(targetCust.isKycFeePaid).toBe(true);
-  });
-
-  it('Step 5: Admin verifies KYC -> KYC = APPROVED / VERIFIED', async () => {
-    const decRes = await request(app)
-      .post(`/api/admin/kyc/${customerId}/decision`)
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({
-        status: 'APPROVED',
-        reason: 'Identity and Aadhaar credentials verified by compliance',
-      });
-
-    expect(decRes.status).toBe(200);
-    const prof = await prisma.customer.findUnique({ where: { id: customerId } });
-    expect(prof?.kycStatus).toBe('APPROVED');
+    expect(invRes.body.success).toBe(true);
+    expect(invRes.body.mimeType).toBe('application/pdf');
+    expect(Buffer.from(invRes.body.data, 'base64').slice(0, 4).toString()).toBe('%PDF');
   });
 
   it('Step 6: Customer opens Loans -> Loan Documents unlocked, Customer sees 0 / 4 documents', async () => {

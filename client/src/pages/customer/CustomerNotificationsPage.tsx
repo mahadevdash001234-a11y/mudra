@@ -123,16 +123,9 @@ export const CustomerNotificationsPage: React.FC = () => {
                 const title = (notif.title || '').toLowerCase();
                 const msg = (notif.message || '').toLowerCase();
                 const event = (notif.eventType || '').toUpperCase();
-                const text = `${title} ${msg}`;
 
                 if (event.includes('PAYMENT') || title.includes('fee') || title.includes('charge') || title.includes('payment') || msg.includes('utr')) {
-                  let chargeParam = '';
-                  if (text.includes('stamp')) chargeParam = '?charge=stamp_duty';
-                  else if (text.includes('gst')) chargeParam = '?charge=gst';
-                  else if (text.includes('insurance')) chargeParam = '?charge=insurance';
-                  else if (text.includes('processing')) chargeParam = '?charge=processing_fee';
-                  else if (text.includes('late')) chargeParam = '?charge=late_payment';
-                  navigate(`/customer/payment${chargeParam}`);
+                  navigate('/customer/payments');
                 } else if (event.includes('AGREEMENT') || title.includes('agreement') || msg.includes('agreement')) {
                   navigate('/customer/loans');
                 } else if (event.includes('KYC') || title.includes('kyc') || msg.includes('aadhaar')) {
@@ -179,16 +172,7 @@ export const CustomerNotificationsPage: React.FC = () => {
                         onClick={(e) => {
                           e.stopPropagation();
                           if (!notif.isRead) markReadMutation.mutate(notif.id);
-                          const title = (notif.title || '').toLowerCase();
-                          const msg = (notif.message || '').toLowerCase();
-                          const text = `${title} ${msg}`;
-                          let chargeParam = '';
-                          if (text.includes('stamp')) chargeParam = '?charge=stamp_duty';
-                          else if (text.includes('gst')) chargeParam = '?charge=gst';
-                          else if (text.includes('insurance')) chargeParam = '?charge=insurance';
-                          else if (text.includes('processing')) chargeParam = '?charge=processing_fee';
-                          else if (text.includes('late')) chargeParam = '?charge=late_payment';
-                          navigate(`/customer/payment${chargeParam}`);
+                          navigate('/customer/payments');
                         }}
                         className="text-[11px] font-bold text-[#155EEF] hover:underline flex items-center gap-1 cursor-pointer bg-transparent border-none p-0"
                       >

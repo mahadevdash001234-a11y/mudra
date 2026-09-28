@@ -8,8 +8,11 @@ import { storageProvider } from '../providers/storage';
 const BRANDING_UPLOAD_DIR = path.join(process.cwd(), 'uploads', 'branding');
 
 function getPublicUrl(req: Request, filename: string): string {
+  const host = req.headers['x-forwarded-host'] || req.get('host') || '';
+  if (!host || host.includes('localhost') || host.includes('127.0.0.1')) {
+    return `/uploads/branding/${filename}`;
+  }
   const proto = req.headers['x-forwarded-proto'] || req.protocol;
-  const host = req.headers['x-forwarded-host'] || req.get('host') || 'localhost';
   return `${proto}://${host}/uploads/branding/${filename}`;
 }
 

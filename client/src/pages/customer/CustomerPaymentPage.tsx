@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/api/client';
@@ -23,6 +23,8 @@ import {
   ArrowRight,
   Sparkles,
   Receipt,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 
 import { useBranding } from '@/contexts/BrandingContext';
@@ -68,11 +70,11 @@ export const CustomerPaymentPage: React.FC = () => {
   const queryClient = useQueryClient();
 
   const [searchParams] = useSearchParams();
-  const chargeIdParam = searchParams.get('chargeId') || searchParams.get('charge');
+  const chargeIdParam = searchParams.get('charge') || searchParams.get('chargeId');
   const [selectedChargeId, setSelectedChargeId] = useState<string | null>(chargeIdParam);
 
-  // Per-charge payment method selection
-  const [selectedMethodMap, setSelectedMethodMap] = useState<Record<string, 'UPI' | 'BANK' | 'LINK'>>({});
+  // Per-charge payment method selection (initially null so no method is auto-selected)
+  const [selectedMethodMap, setSelectedMethodMap] = useState<Record<string, 'UPI' | 'BANK' | 'LINK' | null>>({});
   // Per-charge loading timer during 1-2s delay after clicking Pay Using...
   const [initiatingTimerMap, setInitiatingTimerMap] = useState<Record<string, boolean>>({});
   // Per-charge UTR visibility flag (revealed ONLY AFTER 1.5s delay)
@@ -128,19 +130,20 @@ export const CustomerPaymentPage: React.FC = () => {
 
   // Fetch specific customer charges for this application/customer
   const { data: customerCharges = [], refetch: refetchCharges } = useQuery({
-    queryKey: ['customerChargesList', loanId],
+    queryKey: ['customerChargesList', loanId, chargeIdParam],
     queryFn: async () => {
-      const res = await apiClient.get(
-        loanId && loanId !== 'undefined'
-          ? API_ENDPOINTS.CUSTOMER_CHARGES.BY_APPLICATION(loanId)
-          : API_ENDPOINTS.CUSTOMER_CHARGES.LIST
-      );
+      const endpoint = (loanId && loanId !== 'undefined' && !chargeIdParam)
+        ? API_ENDPOINTS.CUSTOMER_CHARGES.BY_APPLICATION(loanId)
+        : API_ENDPOINTS.CUSTOMER_CHARGES.LIST;
+      const res = await apiClient.get(endpoint);
       const list: any[] = res.data?.data || res.data || [];
       const map = new Map<string, any>();
       for (const item of list) {
         const key = (item.name || '').trim();
         const existing = map.get(key);
         if (!existing) {
+          map.set(key, item);
+        } else if (chargeIdParam && item.id === chargeIdParam) {
           map.set(key, item);
         } else {
           if (existing.status !== 'PAID' && item.status === 'PAID') {
@@ -155,37 +158,61 @@ export const CustomerPaymentPage: React.FC = () => {
     refetchInterval: 1500,
   });
 
-  // Auto-select charge from URL parameter
-  useEffect(() => {
-    if (chargeIdParam && customerCharges.length > 0) {
-      const match = customerCharges.find(
-        (c: any) =>
-          c.id === chargeIdParam ||
-          c.name?.toLowerCase().replace(/[\s/_-]+/g, '') === chargeIdParam.toLowerCase().replace(/[\s/_-]+/g, '') ||
-          normalizeChargeName(c.name || '').toLowerCase().includes(chargeIdParam.toLowerCase())
-      );
-      if (match) {
-        setSelectedChargeId(match.id);
-        setTimeout(() => {
-          const el = document.getElementById(`charge-card-${match.id}`);
-          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 100);
-      }
+  // Resolve exact charge ONLY by Charge ID.
+  // DO NOT use "kyc", "gst", "processing", amount, latest charge, first charge, or customer ID as fallback identifiers.
+  const resolvedExactCharge = useMemo(() => {
+    if (!chargeIdParam || !customerCharges || customerCharges.length === 0) {
+      return null;
     }
+    return customerCharges.find((c: any) => c.id === chargeIdParam) || null;
   }, [chargeIdParam, customerCharges]);
 
-  const pendingCharges = customerCharges.filter((c: any) => c.status === 'PENDING' || c.status === 'UNDER_VERIFICATION');
+  const isExactChargeActive = Boolean(
+    resolvedExactCharge &&
+    (resolvedExactCharge.status === 'PENDING' || resolvedExactCharge.status === 'UNDER_VERIFICATION')
+  );
+
+  // Development mode logging for diagnostics
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      console.log('[CustomerPaymentPage Charge Resolution]', {
+        requestedChargeId: chargeIdParam,
+        authenticatedCustomerId: customerProfile?.id || (customerCharges[0] as any)?.customerId || null,
+        apiResponse: customerCharges,
+        resolvedChargeId: resolvedExactCharge?.id || null,
+        chargeStatus: resolvedExactCharge
+          ? resolvedExactCharge.status
+          : (chargeIdParam ? 'NOT_FOUND_OR_INACTIVE' : 'NO_CHARGE_PARAM_REQUESTED'),
+      });
+    }
+  }, [chargeIdParam, customerProfile?.id, customerCharges, resolvedExactCharge]);
+
+  // Synchronize selectedChargeId when exact charge is resolved
+  useEffect(() => {
+    if (resolvedExactCharge && isExactChargeActive) {
+      setSelectedChargeId(resolvedExactCharge.id);
+      setTimeout(() => {
+        const el = document.getElementById(`charge-card-${resolvedExactCharge.id}`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    } else if (chargeIdParam && !isExactChargeActive) {
+      setSelectedChargeId(null);
+    }
+  }, [resolvedExactCharge, isExactChargeActive, chargeIdParam]);
+
+  const allPendingCharges = customerCharges.filter((c: any) => c.status === 'PENDING' || c.status === 'UNDER_VERIFICATION');
   const paidCharges = customerCharges.filter((c: any) => c.status === 'PAID');
 
-  // Auto-select first pending charge if none selected
-  useEffect(() => {
-    if (!selectedChargeId && pendingCharges.length > 0) {
-      const firstPending = pendingCharges.find((c: any) => !c.transactionRef) || pendingCharges[0];
-      if (firstPending) {
-        setSelectedChargeId(firstPending.id);
-      }
-    }
-  }, [pendingCharges, selectedChargeId]);
+  // If a specific charge ID was requested in URL:
+  // Render ONLY the exact resolved charge if active; if it does not exist or is no longer active, render empty array (safe empty state).
+  // Do NOT silently replace it with another charge.
+  // If NO charge ID was requested in URL, render all active pending charges.
+  const pendingCharges = chargeIdParam
+    ? (resolvedExactCharge && isExactChargeActive ? [resolvedExactCharge] : [])
+    : allPendingCharges;
+
+  const isChargeNotFoundOrInactive = Boolean(chargeIdParam && (!resolvedExactCharge || !isExactChargeActive));
+  const showEmptyState = (customerCharges.length === 0) || isChargeNotFoundOrInactive;
 
   const paidChargesCount = paidCharges.length;
   const totalPendingAmount = pendingCharges.reduce((acc: number, c: any) => acc + c.amount, 0);
@@ -196,8 +223,8 @@ export const CustomerPaymentPage: React.FC = () => {
     setTimeout(() => setCopied(null), 2000);
   };
 
-  const getSelectedMethod = (chgId: string): 'UPI' | 'BANK' | 'LINK' => {
-    return selectedMethodMap[chgId] || 'UPI';
+  const getSelectedMethod = (chgId: string): 'UPI' | 'BANK' | 'LINK' | null => {
+    return selectedMethodMap[chgId] ?? null;
   };
 
   const handleSelectMethod = (chgId: string, method: 'UPI' | 'BANK' | 'LINK') => {
@@ -215,9 +242,12 @@ export const CustomerPaymentPage: React.FC = () => {
     }, 50);
   };
 
-  // Payment Initiation Action with 1.5 Second Delay before UTR section appears
+  // Payment Initiation Action with 2.5s UX delay (in the 2-4s range) before UTR section appears
   const handleInitiatePaymentAction = (chg: any) => {
     const chgId = chg.id;
+    if (initiatingTimerMap[chgId]) {
+      return; // Prevent duplicate payment initiation requests
+    }
     const method = getSelectedMethod(chgId);
 
     setErrorMsg(null);
@@ -238,7 +268,7 @@ export const CustomerPaymentPage: React.FC = () => {
       }
     }
 
-    // Intentional 1.5 Second Delay before UTR submission section is revealed for THIS charge
+    // UX delay of 2.5 seconds (in the 2-4s range) to allow payment action to settle before revealing UTR
     setTimeout(() => {
       setInitiatingTimerMap((prev) => ({ ...prev, [chgId]: false }));
       setShowUtrMap((prev) => ({ ...prev, [chgId]: true }));
@@ -249,13 +279,16 @@ export const CustomerPaymentPage: React.FC = () => {
           utrEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
       }, 100);
-    }, 1500);
+    }, 2500);
   };
 
   // Submit UTR for a specific charge
   const handleSubmitUtrForCharge = async (chg: any, e: React.FormEvent) => {
     e.preventDefault();
     const chgId = chg.id;
+    if (submittingChargeId === chgId) {
+      return; // Prevent duplicate UTR submissions
+    }
     const utrVal = (utrValueMap[chgId] || '').trim();
     if (!utrVal) {
       setErrorMsg('Please enter a valid 12-digit UTR or transaction reference number.');
@@ -390,12 +423,14 @@ export const CustomerPaymentPage: React.FC = () => {
             </p>
           </div>
           <Badge className="bg-[#EFF6FF] text-[#2563EB] border border-[#D6E4F5] text-xs font-bold px-3 py-1">
-            {customerCharges.length > 0 ? `${customerCharges.length} Charges Total` : 'No Active Charges'}
+            {!showEmptyState && pendingCharges.length > 0
+              ? `${pendingCharges.length} Charge${pendingCharges.length === 1 ? '' : 's'} Total`
+              : 'No Active Charges'}
           </Badge>
         </div>
 
-        {/* STAGE-AWARE EMPTY STATE: When no charges are currently active for the customer */}
-        {customerCharges.length === 0 ? (
+        {/* STAGE-AWARE EMPTY STATE: When no charges are currently active for the customer or exact charge not found */}
+        {showEmptyState ? (
           <Card className="bg-white border-[#D6E4F5] rounded-3xl shadow-xs overflow-hidden p-8 text-center space-y-4">
             <div className="w-14 h-14 mx-auto rounded-2xl bg-[#EFF6FF] text-[#2563EB] flex items-center justify-center">
               {!isKycApproved ? (
@@ -567,7 +602,7 @@ export const CustomerPaymentPage: React.FC = () => {
                                 <div className="flex items-center justify-between">
                                   <div className="flex items-center space-x-3.5">
                                     <div className={`w-5 h-5 rounded-full flex items-center justify-center border ${
-                                      method === 'UPI' ? 'bg-[#2563EB] border-[#2563EB]' : 'border-[#D6E4F5]'
+                                      method === 'UPI' ? 'bg-[#2563EB] border-[#2563EB]' : 'border-2 border-[#CBD5E1] bg-white'
                                     }`}>
                                       {method === 'UPI' && <Check className="w-3 h-3 text-white" />}
                                     </div>
@@ -580,6 +615,13 @@ export const CustomerPaymentPage: React.FC = () => {
                                       </div>
                                       <div className="text-xs text-[#64748B] mt-0.5">Pay using any supported UPI app</div>
                                     </div>
+                                  </div>
+                                  <div>
+                                    {method === 'UPI' ? (
+                                      <ChevronDown className="w-5 h-5 text-[#2563EB]" />
+                                    ) : (
+                                      <ChevronRight className="w-5 h-5 text-[#94A3B8]" />
+                                    )}
                                   </div>
                                 </div>
 
@@ -600,16 +642,17 @@ export const CustomerPaymentPage: React.FC = () => {
                                       </button>
                                     </div>
 
-                                    {/* Action Button: Triggers UPI Intent + 1.5s delay */}
+                                    {/* Action Button: Triggers UPI Intent + 2.5s delay */}
                                     <div className="p-4 rounded-2xl bg-[#EFF6FF] border border-[#D6E4F5] flex flex-col items-center gap-3 text-center">
                                       <Button
                                         type="button"
                                         disabled={isInitiating}
+                                        aria-label="Pay with UPI (Pay Using UPI)"
                                         onClick={(e) => {
                                           e.stopPropagation();
                                           handleInitiatePaymentAction(chg);
                                         }}
-                                        className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs h-11 px-6 rounded-xl shadow-md transition cursor-pointer"
+                                        className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs h-11 px-6 rounded-xl shadow-md transition cursor-pointer disabled:opacity-60"
                                       >
                                         {isInitiating ? (
                                           <>
@@ -619,7 +662,7 @@ export const CustomerPaymentPage: React.FC = () => {
                                         ) : (
                                           <>
                                             <ExternalLink className="w-4 h-4" />
-                                            <span>Pay Using UPI</span>
+                                            <span>Pay with UPI</span>
                                           </>
                                         )}
                                       </Button>
@@ -659,7 +702,7 @@ export const CustomerPaymentPage: React.FC = () => {
                                 <div className="flex items-center justify-between">
                                   <div className="flex items-center space-x-3.5">
                                     <div className={`w-5 h-5 rounded-full flex items-center justify-center border ${
-                                      method === 'BANK' ? 'bg-[#2563EB] border-[#2563EB]' : 'border-[#D6E4F5]'
+                                      method === 'BANK' ? 'bg-[#2563EB] border-[#2563EB]' : 'border-2 border-[#CBD5E1] bg-white'
                                     }`}>
                                       {method === 'BANK' && <Check className="w-3 h-3 text-white" />}
                                     </div>
@@ -670,6 +713,13 @@ export const CustomerPaymentPage: React.FC = () => {
                                       </div>
                                       <div className="text-xs text-[#64748B] mt-0.5">Pay directly from your bank account</div>
                                     </div>
+                                  </div>
+                                  <div>
+                                    {method === 'BANK' ? (
+                                      <ChevronDown className="w-5 h-5 text-[#2563EB]" />
+                                    ) : (
+                                      <ChevronRight className="w-5 h-5 text-[#94A3B8]" />
+                                    )}
                                   </div>
                                 </div>
 
@@ -716,11 +766,12 @@ export const CustomerPaymentPage: React.FC = () => {
                                       <Button
                                         type="button"
                                         disabled={isInitiating}
+                                        aria-label="Pay with Bank Transfer (Pay Using Bank Transfer)"
                                         onClick={(e) => {
                                           e.stopPropagation();
                                           handleInitiatePaymentAction(chg);
                                         }}
-                                        className="w-full sm:w-auto h-11 px-6 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs rounded-xl shadow-sm flex items-center justify-center gap-2 cursor-pointer transition"
+                                        className="w-full sm:w-auto h-11 px-6 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs rounded-xl shadow-sm flex items-center justify-center gap-2 cursor-pointer transition disabled:opacity-60"
                                       >
                                         {isInitiating ? (
                                           <>
@@ -730,7 +781,7 @@ export const CustomerPaymentPage: React.FC = () => {
                                         ) : (
                                           <>
                                             <Landmark className="w-4 h-4" />
-                                            <span>Pay Using Bank Transfer</span>
+                                            <span>Pay with Bank Transfer</span>
                                           </>
                                         )}
                                       </Button>
@@ -753,7 +804,7 @@ export const CustomerPaymentPage: React.FC = () => {
                                 <div className="flex items-center justify-between">
                                   <div className="flex items-center space-x-3.5">
                                     <div className={`w-5 h-5 rounded-full flex items-center justify-center border ${
-                                      method === 'LINK' ? 'bg-[#2563EB] border-[#2563EB]' : 'border-[#D6E4F5]'
+                                      method === 'LINK' ? 'bg-[#2563EB] border-[#2563EB]' : 'border-2 border-[#CBD5E1] bg-white'
                                     }`}>
                                       {method === 'LINK' && <Check className="w-3 h-3 text-white" />}
                                     </div>
@@ -764,6 +815,13 @@ export const CustomerPaymentPage: React.FC = () => {
                                       </div>
                                       <div className="text-xs text-[#64748B] mt-0.5">Pay securely using the official payment link</div>
                                     </div>
+                                  </div>
+                                  <div>
+                                    {method === 'LINK' ? (
+                                      <ChevronDown className="w-5 h-5 text-[#2563EB]" />
+                                    ) : (
+                                      <ChevronRight className="w-5 h-5 text-[#94A3B8]" />
+                                    )}
                                   </div>
                                 </div>
 
@@ -790,11 +848,12 @@ export const CustomerPaymentPage: React.FC = () => {
                                       <Button
                                         type="button"
                                         disabled={isInitiating}
+                                        aria-label="Pay with Payment Link (Pay Using Payment Link)"
                                         onClick={(e) => {
                                           e.stopPropagation();
                                           handleInitiatePaymentAction(chg);
                                         }}
-                                        className="w-full sm:w-auto h-11 px-6 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs rounded-xl shadow-sm flex items-center justify-center gap-2 cursor-pointer transition"
+                                        className="w-full sm:w-auto h-11 px-6 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs rounded-xl shadow-sm flex items-center justify-center gap-2 cursor-pointer transition disabled:opacity-60"
                                       >
                                         {isInitiating ? (
                                           <>
@@ -804,7 +863,7 @@ export const CustomerPaymentPage: React.FC = () => {
                                         ) : (
                                           <>
                                             <ExternalLink className="w-4 h-4" />
-                                            <span>Pay Using Payment Link</span>
+                                            <span>Pay with Payment Link</span>
                                           </>
                                         )}
                                       </Button>
@@ -815,12 +874,12 @@ export const CustomerPaymentPage: React.FC = () => {
                             )}
                           </div>
 
-                          {/* INITIATING PAYMENT LOADING BANNER (During 1.5s delay) */}
+                          {/* INITIATING PAYMENT LOADING BANNER (During 2-4s delay) */}
                           {isInitiating && (
                             <div className="p-4 rounded-2xl bg-blue-50 border border-blue-200 flex items-center gap-3 text-xs text-[#2563EB] animate-pulse">
                               <Loader2 className="w-5 h-5 animate-spin shrink-0" />
                               <span className="font-semibold">
-                                Initiating payment & launching payment rail... Please wait 1-2 seconds.
+                                Initiating payment & launching payment rail... Please wait 2-3 seconds.
                               </span>
                             </div>
                           )}

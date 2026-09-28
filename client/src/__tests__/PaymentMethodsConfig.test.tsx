@@ -141,6 +141,11 @@ describe('Dynamic Payment Method Enable/Disable Frontend Suite', () => {
     render(<CustomerPaymentPage />, { wrapper: createWrapper() });
 
     await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Pay Now/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Pay Now/i }));
+
+    await waitFor(() => {
       expect(screen.getByText(/Select Payment Method|Choose Payment Method/i)).toBeInTheDocument();
     });
 
@@ -192,6 +197,11 @@ describe('Dynamic Payment Method Enable/Disable Frontend Suite', () => {
     });
 
     render(<CustomerPaymentPage />, { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Pay Now/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Pay Now/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/Select Payment Method|Choose Payment Method/i)).toBeInTheDocument();

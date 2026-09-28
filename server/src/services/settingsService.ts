@@ -10,6 +10,11 @@ import {
   UpdatePaymentConfigInput,
 } from '../validators/phase5Validators';
 
+function sanitizeBrandingUrl(url: string | null | undefined): string | null | undefined {
+  if (!url || typeof url !== 'string') return url;
+  return url.replace(/^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?(\/uploads\/)/i, '$1');
+}
+
 export class SettingsService {
   /**
    * Retrieves non-sensitive public configuration for dynamic branding and borrower instructions.
@@ -36,10 +41,10 @@ export class SettingsService {
       companyName: branding?.companyName || 'Your Financial Services',
       companyLegalName: branding?.companyLegalName || 'Your Financial Services Pvt. Ltd.',
       appName: branding?.appName || 'LoanApp',
-      logoUrl: branding?.logoUrl || null,
-      faviconUrl: branding?.faviconUrl || null,
-      secondaryLogoUrl: branding?.secondaryLogoUrl || null,
-      watermarkLogoUrl: branding?.watermarkLogoUrl || null,
+      logoUrl: sanitizeBrandingUrl(branding?.logoUrl) || null,
+      faviconUrl: sanitizeBrandingUrl(branding?.faviconUrl) || null,
+      secondaryLogoUrl: sanitizeBrandingUrl(branding?.secondaryLogoUrl) || null,
+      watermarkLogoUrl: sanitizeBrandingUrl(branding?.watermarkLogoUrl) || null,
       watermarkOpacity: branding?.watermarkOpacity ?? 0.10,
       watermarkSize: branding?.watermarkSize || 'MEDIUM',
       watermarkPosition: branding?.watermarkPosition || 'CENTER',
@@ -116,6 +121,13 @@ export class SettingsService {
         data: { id: 'default' },
       });
     }
+    if (settings) {
+      settings.logoUrl = sanitizeBrandingUrl(settings.logoUrl) as any;
+      settings.faviconUrl = sanitizeBrandingUrl(settings.faviconUrl) as any;
+      settings.secondaryLogoUrl = sanitizeBrandingUrl(settings.secondaryLogoUrl) as any;
+      settings.approvalLetterHeaderUrl = sanitizeBrandingUrl(settings.approvalLetterHeaderUrl) as any;
+      settings.watermarkLogoUrl = sanitizeBrandingUrl(settings.watermarkLogoUrl) as any;
+    }
     return settings;
   }
 
@@ -130,11 +142,11 @@ export class SettingsService {
       companyName: input.companyName,
       companyLegalName: input.companyLegalName ?? previous.companyLegalName,
       appName: input.appName,
-      logoUrl: input.logoUrl !== undefined ? (input.logoUrl || null) : previous.logoUrl,
-      faviconUrl: input.faviconUrl !== undefined ? (input.faviconUrl || null) : previous.faviconUrl,
-      secondaryLogoUrl: input.secondaryLogoUrl !== undefined ? (input.secondaryLogoUrl || null) : previous.secondaryLogoUrl,
-      approvalLetterHeaderUrl: input.approvalLetterHeaderUrl !== undefined ? (input.approvalLetterHeaderUrl || null) : previous.approvalLetterHeaderUrl,
-      watermarkLogoUrl: input.watermarkLogoUrl !== undefined ? (input.watermarkLogoUrl || null) : previous.watermarkLogoUrl,
+      logoUrl: input.logoUrl !== undefined ? (sanitizeBrandingUrl(input.logoUrl) || null) : previous.logoUrl,
+      faviconUrl: input.faviconUrl !== undefined ? (sanitizeBrandingUrl(input.faviconUrl) || null) : previous.faviconUrl,
+      secondaryLogoUrl: input.secondaryLogoUrl !== undefined ? (sanitizeBrandingUrl(input.secondaryLogoUrl) || null) : previous.secondaryLogoUrl,
+      approvalLetterHeaderUrl: input.approvalLetterHeaderUrl !== undefined ? (sanitizeBrandingUrl(input.approvalLetterHeaderUrl) || null) : previous.approvalLetterHeaderUrl,
+      watermarkLogoUrl: input.watermarkLogoUrl !== undefined ? (sanitizeBrandingUrl(input.watermarkLogoUrl) || null) : previous.watermarkLogoUrl,
       documentWatermarkEnabled: input.documentWatermarkEnabled !== undefined ? input.documentWatermarkEnabled : (previous.documentWatermarkEnabled ?? true),
       invoiceWatermarkEnabled: input.invoiceWatermarkEnabled !== undefined ? input.invoiceWatermarkEnabled : (previous.invoiceWatermarkEnabled ?? true),
       watermarkOpacity: input.watermarkOpacity !== undefined ? input.watermarkOpacity : (previous.watermarkOpacity ?? 0.10),

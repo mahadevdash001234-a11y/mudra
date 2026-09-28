@@ -926,7 +926,7 @@ export const CustomerDocuments: React.FC = () => {
                         ) : (
                           <Button
                             size="sm"
-                            onClick={() => navigate(`/customer/payments?chargeId=${docFeeCharge.id}`)}
+                            onClick={() => navigate(`/customer/payments?charge=${docFeeCharge.id}`)}
                             className="bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs h-9 px-5 rounded-xl shadow-md flex items-center gap-1.5"
                           >
                             <span>{(docFeeCharge.status as any === 'UNDER_VERIFICATION' || docFeeCharge.transactionRef) ? 'View Payment Status' : 'Pay Document Fee'}</span>
