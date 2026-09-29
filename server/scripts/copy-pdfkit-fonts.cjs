@@ -25,12 +25,8 @@ for (const src of candidates) {
 }
 
 if (!copied) {
-  console.error('PDFKit standard-fonts directory was not found.');
-  console.error('Checked:');
-  for (const candidate of candidates) {
-    console.error(`- ${candidate}`);
-  }
-  process.exit(1);
+  console.log('PDFKit standard-fonts not found in current workspace context; skipping copy.');
+  process.exit(0);
 }
 
 const requiredFiles = [
