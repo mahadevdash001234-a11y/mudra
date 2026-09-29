@@ -1999,7 +1999,7 @@ export const AdminKycList: React.FC = () => {
                 type="button"
                 onClick={handleConfirmDelete}
                 disabled={isDeletingCustomer}
-                className="bg-warning/90 hover:bg-warning text-white font-bold text-xs h-9 px-4 disabled:opacity-50"
+                className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs h-9 px-4 disabled:opacity-50"
               >
                 {isDeletingCustomer ? 'Removing KYC...' : 'Remove KYC Submission'}
               </Button>
