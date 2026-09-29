@@ -5,7 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "dev": "nodemon --watch src --ext ts --exec \"node --max-old-space-size=4096 -r ts-node/register/transpile-only src/server.ts\"",
-    "build": "prisma generate && tsc",
+    "build": "node -e \"const fs=require('fs'); if(fs.existsSync('../node_modules/pdfkit')){fs.mkdirSync('node_modules/pdfkit/js/standard-fonts',{recursive:true}); fs.cpSync('../node_modules/pdfkit/js/standard-fonts','node_modules/pdfkit/js/standard-fonts',{recursive:true}); fs.copyFileSync('../node_modules/pdfkit/package.json','node_modules/pdfkit/package.json');}\" && prisma generate && tsc",
     "start": "node dist/server.js",
     "lint": "eslint .",
     "test": "vitest run --pool=threads --poolOptions.threads.singleThread=true",

@@ -3,9 +3,7 @@
   "functions": {
     "api/index.ts": {
       "includeFiles": [
-        "../node_modules/pdfkit/js/standard-fonts/**",
         "node_modules/pdfkit/js/standard-fonts/**",
-        "../node_modules/pdfkit/package.json",
         "node_modules/pdfkit/package.json"
       ]
     }
