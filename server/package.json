@@ -5,7 +5,6 @@
   "type": "commonjs",
   "scripts": {
     "dev": "nodemon --watch src --ext ts --exec \"node --max-old-space-size=4096 -r ts-node/register/transpile-only src/server.ts\"",
-    "postinstall": "node scripts/copy-pdfkit-fonts.cjs",
     "build": "prisma generate && tsc",
     "start": "node dist/server.js",
     "lint": "eslint .",
