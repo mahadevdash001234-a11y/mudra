@@ -2,7 +2,7 @@
   "version": 2,
   "functions": {
     "api/index.ts": {
-      "includeFiles": "node_modules/pdfkit/js/data/**"
+      "includeFiles": "{../node_modules/pdfkit/js/data/**,node_modules/pdfkit/js/data/**}"
     }
   },
   "rewrites": [
