@@ -136,6 +136,29 @@ export const AdminWhatsAppSettings: React.FC = () => {
     fetchWhatsAppSettings();
   }, []);
 
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+
+  const handleTestConnection = async () => {
+    setIsTestingConnection(true);
+    setSettingsError('');
+    setSettingsSuccess('');
+    try {
+      const res = await adminService.testWhatsAppConnection();
+      if (res.success) {
+        setSettingsSuccess(res.message || 'WhatsApp gateway connection verified successfully.');
+        setStatus('CONNECTED');
+      } else {
+        setSettingsError(res.error || res.message || 'Failed to connect to WhatsApp gateway.');
+        setStatus((res as any).status || 'CONNECTION_FAILED');
+      }
+      await fetchWhatsAppSettings();
+    } catch (err: unknown) {
+      setSettingsError(err instanceof Error ? err.message : 'Error testing connection');
+    } finally {
+      setIsTestingConnection(false);
+    }
+  };
+
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     setSavingSettings(true);
@@ -158,7 +181,7 @@ export const AdminWhatsAppSettings: React.FC = () => {
       });
 
       setStatus(updated?.status || 'CONFIGURED');
-      setSettingsSuccess('WA Bridge configuration saved securely.');
+      setSettingsSuccess('WA Bridge configuration saved and integrated successfully.');
       setAccessToken('');
       await fetchWhatsAppSettings();
     } catch (err: unknown) {
@@ -744,6 +767,27 @@ export const AdminWhatsAppSettings: React.FC = () => {
                     <span className="font-semibold">Last Provider Error:</span> {lastError}
                   </div>
                 )}
+
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={handleTestConnection}
+                    disabled={isTestingConnection || savingSettings}
+                    className="w-full py-2 px-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 text-xs font-semibold rounded-lg border border-slate-300 transition flex items-center justify-center gap-2"
+                  >
+                    {isTestingConnection ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        Testing Connection...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Test Connection
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
